@@ -29,13 +29,15 @@ function fmtPct(v) {
 }
 
 const COLUMNS = [
-  { key: 'trade_num',     label: '#',          align: 'right' },
+  { key: 'trade_num',     label: '#',           align: 'right' },
   { key: 'direction',     label: 'Side',        align: 'left'  },
   { key: 'entry_time',    label: 'Entry Time',  align: 'left'  },
   { key: 'entry_price',   label: 'Entry',       align: 'right' },
   { key: 'exit_time',     label: 'Exit Time',   align: 'left'  },
   { key: 'exit_price',    label: 'Exit',        align: 'right' },
   { key: 'exit_reason',   label: 'Reason',      align: 'left'  },
+  { key: 'equity_before', label: 'Capital In',  align: 'right' },
+  { key: 'equity_after',  label: 'Capital Out', align: 'right' },
   { key: 'pnl',           label: 'PnL',         align: 'right' },
   { key: 'pnl_pct',       label: 'PnL %',       align: 'right' },
   { key: 'fees',          label: 'Fees',        align: 'right' },
@@ -147,8 +149,24 @@ export default function TradeLog({ trades = [] }) {
                   <td style={{ textAlign: 'right' }}>{fmtPrice(trade.entry_price)}</td>
                   <td className="plain">{fmtDate(trade.exit_time)}</td>
                   <td style={{ textAlign: 'right' }}>{fmtPrice(trade.exit_price)}</td>
-                  <td className="plain" style={{ color: 'var(--text-muted)', fontSize: '0.78rem' }}>
-                    {trade.exit_reason ?? '—'}
+                  <td className="plain">
+                    {trade.exit_reason
+                      ? (() => {
+                          const r = trade.exit_reason
+                          const isStop = r === 'stop_long' || r === 'stop_short'
+                          return (
+                            <span className={`badge ${isStop ? 'badge-danger' : 'badge-ok'}`} style={{ fontSize: '0.72rem' }}>
+                              {r}
+                            </span>
+                          )
+                        })()
+                      : '—'}
+                  </td>
+                  <td style={{ textAlign: 'right', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}>
+                    {trade.equity_before != null ? fmtPnl(trade.equity_before) : '—'}
+                  </td>
+                  <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }} className={pnlClass}>
+                    {trade.equity_after != null ? fmtPnl(trade.equity_after) : '—'}
                   </td>
                   <td style={{ textAlign: 'right' }} className={pnlClass}>
                     {fmtPnl(trade.pnl)}

@@ -62,6 +62,7 @@ async def run_backtest(
     trade_log: list[dict] = []
     state = PositionState()
     pending_entry: Signal | None = None  # deferred to next open
+    entry_equity: float = 0.0  # equity at moment of entry (before entry fee)
 
     n = len(df)
 
@@ -76,6 +77,7 @@ async def run_backtest(
             pending_entry = None
             if sig.action == "entry_long":
                 exec_price = open_price
+                entry_equity = equity
                 qty = equity / exec_price
                 fee = equity * cost_factor
                 equity -= fee
@@ -88,6 +90,7 @@ async def run_backtest(
                 )
             elif sig.action == "entry_short":
                 exec_price = open_price
+                entry_equity = equity
                 qty = equity / exec_price
                 fee = equity * cost_factor
                 equity -= fee
@@ -115,18 +118,25 @@ async def run_backtest(
                         exec_price = close_price if execution_mode == "close_current" else open_price
 
                     pnl = _compute_pnl(state, exec_price, cost_factor, equity)
+                    equity_after = equity + pnl
                     equity += pnl
                     dur = t - _find_entry_candle_idx(df, state.entry_time)
+                    pnl_pct = (pnl / entry_equity * 100) if entry_equity > 0 else 0.0
                     trade_log.append({
                         "entry_time": state.entry_time,
                         "exit_time": int(candle["open_time"]),
                         "side": state.side,
+                        "direction": state.side,
                         "entry_price": state.entry_price,
                         "exit_price": exec_price,
                         "pnl": round(pnl, 4),
+                        "pnl_pct": round(pnl_pct / 100, 6),
                         "fees": round(abs(pnl - _compute_pnl_no_fees(state, exec_price)), 4),
                         "exit_reason": sig.action,
                         "duration_candles": max(dur, 0),
+                        "equity_before": round(entry_equity, 4),
+                        "equity_after": round(equity_after, 4),
+                        "position_size": round(entry_equity, 4),
                     })
                     state = PositionState()
                     exit_executed = True
@@ -152,6 +162,7 @@ async def run_backtest(
                     else:
                         # close_current: execute at close
                         exec_price = close_price
+                        entry_equity = equity
                         qty = equity / exec_price
                         fee = equity * cost_factor
                         equity -= fee
