@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+.venv/
+venv/
+env/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+/tmp/test_results*.txt
+/tmp/build*.txt
+
+# Database / data files
+data/*.db
+data/*.db-wal
+data/*.db-shm
+
+# Environment
+.env
+.env.*
+
+# Node / frontend
+frontend/node_modules/
+frontend/dist/
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Windsurf plans (local session artifacts)
+.windsurf/
