@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import EquityChart from './EquityChart'
 import TradeLog from './TradeLog'
+import TradeReviewChart from './TradeReviewChart'
 
 const PAIRS = [
   'BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'XRPUSDT',
@@ -204,8 +205,8 @@ function MetricsGrid({ summary, capital, liquidated }) {
   )
 }
 
-/* ---- Results tabs (Chart | Trades) ---- */
-function ResultsView({ result }) {
+/* ---- Results tabs (Chart | Trades | Review) ---- */
+function ResultsView({ result, symbol, interval, startMs, endMs }) {
   const [view, setView] = useState('chart')
 
   if (!result) return null
@@ -224,6 +225,7 @@ function ResultsView({ result }) {
         {[
           { id: 'chart',  label: 'Charts' },
           { id: 'trades', label: `Trades (${tradeLog.length})` },
+          { id: 'review', label: 'Review' },
         ].map(t => (
           <button
             key={t.id}
@@ -256,6 +258,15 @@ function ResultsView({ result }) {
 
       {view === 'chart'  && <EquityChart equityCurve={equityCurve} drawdownCurve={drawdownCurve} />}
       {view === 'trades' && <TradeLog trades={tradeLog} />}
+      {view === 'review' && (
+        <TradeReviewChart
+          symbol={symbol}
+          interval={interval}
+          startMs={startMs}
+          endMs={endMs}
+          trades={tradeLog}
+        />
+      )}
     </div>
   )
 }
@@ -334,6 +345,9 @@ export default function BacktestPanel() {
       setLoadingRes(false)
     }
   }, [])
+
+  const startMs = new Date(startDate).getTime()
+  const endMs   = new Date(endDate).getTime()
 
   const handleRun = async () => {
     if (!symbol || !interval || !startDate || !endDate || !selectedStrat) return
@@ -505,7 +519,9 @@ export default function BacktestPanel() {
             </span>
           </div>
           <div className="card-body">
-            {!loadingRes && result && <ResultsView result={result} />}
+            {result && !loadingRes && (
+              <ResultsView result={result} symbol={symbol} interval={interval} startMs={startMs} endMs={endMs} />
+            )}
           </div>
         </div>
       )}
