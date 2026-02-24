@@ -34,6 +34,59 @@ function fmtMoney(v) {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 }).format(n)
 }
 
+const PARAM_META = {
+  N_entrada: {
+    label: 'Entry Window (N)',
+    tooltip: 'Number of candles to look back for breakout detection (excluding current). Long entry when Close > max High of last N candles; short entry when Close < min Low of last N candles.',
+  },
+  M_salida: {
+    label: 'Exit Window (M)',
+    tooltip: 'Number of candles to look back for the exit signal. Should be ≤ N. Long exits when Close < min Low of last M candles; short exits when Close > max High of last M candles.',
+  },
+  stop_pct: {
+    label: 'Stop Loss %',
+    tooltip: 'Stop loss distance as a fraction from the entry reference level (e.g. 0.02 = 2%). Triggered intra-bar on the Low for longs and on the High for shorts.',
+  },
+  modo_ejecucion: {
+    label: 'Execution Mode',
+    tooltip: 'open_next: order executes at the open of the next candle (realistic, avoids look-ahead). close_current: executes at the close of the signal candle (optimistic).',
+  },
+  habilitar_long: {
+    label: 'Allow Longs',
+    tooltip: 'Enable long (buy) entries when price closes above the N-candle high breakout level.',
+  },
+  habilitar_short: {
+    label: 'Allow Shorts',
+    tooltip: 'Enable short (sell) entries when price closes below the N-candle low breakout level.',
+  },
+  coste_total_bps: {
+    label: 'Cost (bps)',
+    tooltip: 'Total round-trip transaction cost in basis points (1 bps = 0.01%). Covers broker fees + slippage for both entry and exit. Binance standard ≈ 10 bps/side, so 20 bps is a realistic round-trip estimate.',
+  },
+}
+
+function ParamLabel({ name, description }) {
+  const meta = PARAM_META[name]
+  const label = meta?.label ?? name
+  const tip   = meta?.tooltip ?? description ?? ''
+  return (
+    <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+      {label}
+      {tip && (
+        <span style={{ position: 'relative', display: 'inline-flex' }} className="param-help-wrap">
+          <span style={{
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+            width: 14, height: 14, borderRadius: '50%',
+            background: 'var(--border-default)', color: 'var(--text-muted)',
+            fontSize: '0.65rem', fontWeight: 700, cursor: 'default', userSelect: 'none', flexShrink: 0,
+          }}>?</span>
+          <span className="param-tooltip">{tip}</span>
+        </span>
+      )}
+    </label>
+  )
+}
+
 /* ---- Dynamic parameter form for a strategy ---- */
 function ParamForm({ params, values, onChange, disabled }) {
   if (!params || params.length === 0) return null
@@ -45,7 +98,7 @@ function ParamForm({ params, values, onChange, disabled }) {
         if (p.type === 'bool') {
           return (
             <div key={p.name} className="form-group">
-              <label className="form-label" title={p.description}>{p.name}</label>
+              <ParamLabel name={p.name} description={p.description} />
               <div className="toggle-group">
                 <button
                   type="button"
@@ -66,7 +119,7 @@ function ParamForm({ params, values, onChange, disabled }) {
           const options = ['open_next', 'close_current']
           return (
             <div key={p.name} className="form-group">
-              <label className="form-label" title={p.description}>{p.name}</label>
+              <ParamLabel name={p.name} description={p.description} />
               <select
                 className="form-control"
                 value={val}
@@ -82,7 +135,7 @@ function ParamForm({ params, values, onChange, disabled }) {
         // int / float
         return (
           <div key={p.name} className="form-group">
-            <label className="form-label" title={p.description}>{p.name}</label>
+            <ParamLabel name={p.name} description={p.description} />
             <input
               type="number"
               className="form-control"
@@ -157,14 +210,9 @@ function ResultsView({ result }) {
 
   if (!result) return null
 
-  const equityCurve   = result.equity_curve ?? []
-  const tradeLog      = result.trade_log    ?? []
-  const drawdownCurve = result.summary?.drawdown_curve
-    ? result.summary.drawdown_curve.map((v, i) => ({
-        timestamp: equityCurve[i]?.timestamp,
-        drawdown: v / 100,  // backend returns percentages, chart expects ratio
-      }))
-    : []
+  const equityCurve   = result.equity_curve            ?? []
+  const tradeLog      = result.trade_log               ?? []
+  const drawdownCurve = result.summary?.drawdown_curve ?? []
 
   return (
     <div className="panel-section">

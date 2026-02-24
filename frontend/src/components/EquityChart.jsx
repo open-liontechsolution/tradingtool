@@ -70,20 +70,14 @@ export default function EquityChart({ equityCurve = [], drawdownCurve = [] }) {
     )
   }
 
-  // Merge equity and drawdown by timestamp
-  const ddMap = {}
-  for (const d of drawdownCurve) {
-    ddMap[d.timestamp] = d.drawdown
-  }
-
-  const chartData = equityCurve.map(d => ({
-    ts: d.timestamp,
-    equity: d.equity,
-    drawdown: ddMap[d.timestamp] ?? 0,
+  // Both arrays are plain number[] — merge by index
+  const chartData = equityCurve.map((eq, i) => ({
+    ts: i,
+    equity: eq,
+    drawdown: (drawdownCurve[i] ?? 0) / 100,  // backend returns pct, chart uses ratio
   }))
 
   const initialEquity = chartData[0]?.equity ?? 1
-  const maxEquity     = Math.max(...chartData.map(d => d.equity))
   const minDrawdown   = Math.min(...chartData.map(d => d.drawdown))
 
   // Dynamic Y-axis formatter for equity

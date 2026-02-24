@@ -651,3 +651,28 @@ select.form-control option {
   flex-direction: column;
   gap: var(--space-4);
 }
+
+/* ---- Param help tooltip ---- */
+.param-help-wrap .param-tooltip {
+  display: none;
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--bg-card);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  padding: 8px 10px;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  line-height: 1.45;
+  white-space: normal;
+  width: 240px;
+  z-index: 100;
+  box-shadow: var(--shadow-card);
+  pointer-events: none;
+}
+
+.param-help-wrap:hover .param-tooltip {
+  display: block;
+}
