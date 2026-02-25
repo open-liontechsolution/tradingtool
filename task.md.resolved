@@ -1,0 +1,34 @@
+# Trading Tools Laboratory - Task Breakdown
+
+## Phase 1: Project Setup & Foundation
+- [x] Initialize project structure (Vite + React frontend, Python FastAPI backend)
+- [x] Set up SQLite database with schema
+- [x] Configure project dependencies
+
+## Phase 2: Backend - Data Layer
+- [x] Implement Binance API client with rate limiting
+- [x] Implement klines download engine with gap detection
+- [x] Implement SQLite storage layer (upsert, dedup, integrity checks)
+- [x] Implement derived metrics calculation engine
+- [x] Create REST API endpoints for data management
+
+## Phase 3: Backend - Backtesting Engine
+- [x] Implement backtesting core engine
+- [x] Implement strategy plugin system (interface/contract)
+- [x] Implement "Breakout" initial strategy with exact rules
+- [x] Implement results metrics calculator
+- [x] Create REST API endpoints for backtesting
+
+## Phase 4: Frontend - Dashboard
+- [x] Build Data Manager panel (pair/timeframe/range selectors, download controls)
+- [x] Build download progress & rate limit monitoring UI
+- [x] Build derived metrics panel
+- [x] Build Backtesting panel (strategy selector, dynamic inputs, results)
+- [x] Build equity/drawdown charts and trade log table
+- [x] Polish UI/UX with premium design
+
+## Phase 5: Verification
+- [x] Test data download flow end-to-end
+- [x] Test backtesting engine with known scenarios
+- [x] Test rate limit handling
+- [x] Visual verification of dashboard

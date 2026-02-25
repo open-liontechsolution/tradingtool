@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from backend.strategies.base import Strategy
 from backend.strategies.breakout import BreakoutStrategy
+from backend.strategies.support_resistance import SupportResistanceStrategy
 
 _REGISTRY: dict[str, type[Strategy]] = {}
 
@@ -12,6 +13,7 @@ def _register(cls: type[Strategy]) -> None:
 
 
 _register(BreakoutStrategy)
+_register(SupportResistanceStrategy)
 
 
 def get_strategy(name: str) -> Strategy:

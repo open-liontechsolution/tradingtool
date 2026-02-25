@@ -36,6 +36,10 @@ function fmtMoney(v) {
 }
 
 const PARAM_META = {
+  reversal_pct: {
+    label: 'Reversal %',
+    tooltip: 'Minimum percentage reversal from the running extreme to confirm a swing point (support or resistance). E.g. 0.03 = 3%. Smaller values detect more swing points; larger values only detect major turns.',
+  },
   N_entrada: {
     label: 'Entry Window (N)',
     tooltip: 'Number of candles to look back for breakout detection (excluding current). Long entry when Close > max High of last N candles; short entry when Close < min Low of last N candles.',
