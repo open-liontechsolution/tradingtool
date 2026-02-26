@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 BINANCE_BASE_URL = "https://api.binance.com"
 KLINES_ENDPOINT = "/api/v3/klines"
+TICKER_PRICE_ENDPOINT = "/api/v3/ticker/price"
 
 # Binance public endpoint rate limits
 WEIGHT_LIMIT_PER_MINUTE = 1200
@@ -159,6 +160,49 @@ class BinanceClient:
                     await asyncio.sleep(backoff)
 
         raise RuntimeError(f"Failed to fetch klines for {symbol}/{interval} after {max_retries} attempts")
+
+    async def get_ticker_price(self, symbol: str) -> float:
+        """
+        Fetch current spot price for a symbol via GET /api/v3/ticker/price (weight: 2).
+        Returns the price as a float.
+        """
+        params: dict[str, Any] = {"symbol": symbol}
+        max_retries = 4
+        for attempt in range(max_retries):
+            async with self._lock:
+                await self._wait_for_rate_limit()
+                client = await self._get_client()
+                try:
+                    response = await client.get(TICKER_PRICE_ENDPOINT, params=params)
+                    self.rate_limit.last_request_time = time.monotonic()
+                    self._parse_rate_limit_headers(response.headers)
+
+                    if response.status_code == 200:
+                        data = response.json()
+                        return float(data["price"])
+
+                    elif response.status_code == 429:
+                        retry_after = float(response.headers.get("Retry-After", 0))
+                        backoff = max(retry_after, _exponential_backoff(attempt))
+                        self.rate_limit.backoff_until = time.monotonic() + backoff
+                        logger.warning("429 on ticker, backing off %.1fs (attempt %d)", backoff, attempt + 1)
+                        await asyncio.sleep(backoff)
+
+                    elif response.status_code == 418:
+                        retry_after = float(response.headers.get("Retry-After", 60))
+                        self.rate_limit.blocked_until = time.monotonic() + retry_after
+                        logger.error("418 IP banned for %.0fs", retry_after)
+                        await asyncio.sleep(retry_after)
+
+                    else:
+                        response.raise_for_status()
+
+                except httpx.TimeoutException as exc:
+                    backoff = _exponential_backoff(attempt)
+                    logger.warning("Ticker timeout attempt %d, retrying in %.1fs: %s", attempt + 1, backoff, exc)
+                    await asyncio.sleep(backoff)
+
+        raise RuntimeError(f"Failed to fetch ticker price for {symbol} after {max_retries} attempts")
 
 
 def _exponential_backoff(attempt: int, base: float = 1.0, cap: float = 60.0) -> float:

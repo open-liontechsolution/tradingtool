@@ -1,6 +1,7 @@
 """FastAPI application factory. Mounts API routes and serves frontend static files."""
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -16,12 +17,27 @@ logger = logging.getLogger(__name__)
 from backend.database import init_db
 from backend.api.data_routes import router as data_router
 from backend.api.backtest_routes import router as backtest_router
+from backend.api.signal_routes import router as signal_router
+from backend.signal_engine import run_signal_scanner
+from backend.live_tracker import run_live_tracker
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    scanner_task = asyncio.create_task(run_signal_scanner())
+    tracker_task = asyncio.create_task(run_live_tracker())
     yield
+    scanner_task.cancel()
+    tracker_task.cancel()
+    try:
+        await scanner_task
+    except asyncio.CancelledError:
+        pass
+    try:
+        await tracker_task
+    except asyncio.CancelledError:
+        pass
 
 
 app = FastAPI(
@@ -46,6 +62,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 app.include_router(data_router, prefix="/api")
 app.include_router(backtest_router, prefix="/api")
+app.include_router(signal_router, prefix="/api")
 
 # Serve frontend static files if the dist directory exists
 frontend_dist = Path(__file__).parent.parent / "frontend" / "dist"

@@ -178,6 +178,160 @@ async def cancel_job(job_id: int) -> bool:
 # Active tasks registry
 _active_tasks: dict[int, asyncio.Task] = {}
 
+# ---------------------------------------------------------------------------
+# Automatic gap-fill for signal engine / live tracker
+# ---------------------------------------------------------------------------
+
+# Set of (symbol, interval) pairs currently being synced (avoids duplicate tasks)
+_syncing: set[tuple[str, str]] = set()
+
+# Cache: (symbol, interval) → end_ms up to which we confirmed data is complete.
+# Avoids re-querying DB on every scanner cycle when nothing has changed.
+_verified_ranges: dict[tuple[str, str], int] = {}
+
+
+async def _sync_gaps_task(
+    symbol: str, interval: str, start_ms: int, end_ms: int
+) -> None:
+    """
+    Background coroutine: detect and fill gaps in [start_ms, end_ms) for
+    symbol/interval without creating a download_jobs row.
+    Removes (symbol, interval) from _syncing when done.
+    """
+    key = (symbol, interval)
+    try:
+        expected = _expected_open_times(start_ms, end_ms, interval)
+        if not expected:
+            return
+
+        downloaded_at = _now_iso()
+        BATCH_SIZE = 500
+        step_ms = INTERVAL_MS[interval]
+
+        async with get_db() as db:
+            existing = await _get_existing_open_times(db, symbol, interval, start_ms, end_ms)
+            gaps = sorted(set(expected) - existing)
+
+        if not gaps:
+            _verified_ranges[key] = end_ms
+            return
+
+        logger.info(
+            "ensure_candles: syncing %d missing candles for %s %s",
+            len(gaps), symbol, interval,
+        )
+
+        i = 0
+        while i < len(gaps):
+            batch_start = gaps[i]
+            batch_end_idx = min(i + BATCH_SIZE, len(gaps))
+            batch_end = gaps[batch_end_idx - 1] + step_ms
+
+            try:
+                raw_candles = await binance_client.get_klines(
+                    symbol=symbol,
+                    interval=interval,
+                    start_time=batch_start,
+                    end_time=batch_end - 1,
+                    limit=BATCH_SIZE,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "ensure_candles: klines fetch failed for %s %s batch %d: %s",
+                    symbol, interval, i, exc,
+                )
+                return  # will retry on next scanner cycle
+
+            candles = []
+            for raw in raw_candles:
+                c = parse_candle(raw, symbol, interval, downloaded_at)
+                if validate_candle(c):
+                    candles.append(c)
+
+            async with get_db() as db:
+                await _upsert_candles(db, candles)
+
+            i = batch_end_idx
+
+        # Final verification
+        async with get_db() as db:
+            final_existing = await _get_existing_open_times(db, symbol, interval, start_ms, end_ms)
+        final_gaps = len(set(expected) - final_existing)
+        if final_gaps == 0:
+            _verified_ranges[key] = end_ms
+            logger.info("ensure_candles: sync complete for %s %s", symbol, interval)
+        else:
+            logger.warning(
+                "ensure_candles: %d gaps remain for %s %s after sync",
+                final_gaps, symbol, interval,
+            )
+
+    except Exception as exc:
+        logger.exception("ensure_candles: unexpected error for %s %s: %s", symbol, interval, exc)
+    finally:
+        _syncing.discard(key)
+
+
+async def ensure_candles(
+    symbol: str, interval: str, start_ms: int, end_ms: int
+) -> bool:
+    """
+    Ensure [start_ms, end_ms) klines exist in DB for symbol/interval.
+
+    Returns True if all required candles are already present (ready to scan).
+    Returns False if a background sync was launched (caller should skip this cycle).
+
+    Uses _verified_ranges to avoid re-querying DB when nothing has changed,
+    and _syncing to prevent duplicate concurrent downloads for the same pair.
+    """
+    key = (symbol, interval)
+
+    # Fast path: already verified up to (or beyond) end_ms
+    if _verified_ranges.get(key, 0) >= end_ms:
+        return True
+
+    # If a sync is already running, just report not-ready
+    if key in _syncing:
+        return False
+
+    # Check whether the last required candle (end_ms - step) is present
+    step_ms = INTERVAL_MS.get(interval)
+    if step_ms is None:
+        raise ValueError(f"Unknown interval: {interval}")
+
+    last_required = end_ms - step_ms  # open_time of the last candle we need
+
+    async with get_db() as db:
+        cursor = await db.execute(
+            "SELECT COUNT(*) FROM klines WHERE symbol=? AND interval=? AND open_time>=? AND open_time<?",
+            (symbol, interval, start_ms, end_ms),
+        )
+        row = await cursor.fetchone()
+        actual_count = row[0] if row else 0
+
+        # Also check the critical last candle is there
+        cursor2 = await db.execute(
+            "SELECT 1 FROM klines WHERE symbol=? AND interval=? AND open_time=?",
+            (symbol, interval, last_required),
+        )
+        has_last = await cursor2.fetchone() is not None
+
+    expected_count = len(_expected_open_times(start_ms, end_ms, interval))
+
+    if has_last and actual_count >= expected_count:
+        # All candles present — update cache
+        _verified_ranges[key] = end_ms
+        return True
+
+    # Launch background sync
+    _syncing.add(key)
+    asyncio.create_task(_sync_gaps_task(symbol, interval, start_ms, end_ms))
+    logger.info(
+        "ensure_candles: launched async sync for %s %s (%d/%d candles present)",
+        symbol, interval, actual_count, expected_count,
+    )
+    return False
+
 
 async def run_download_job(job_id: int) -> None:
     """Main download coroutine. Runs as a background asyncio Task."""

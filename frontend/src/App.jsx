@@ -1,10 +1,12 @@
 import { useState } from 'react'
 import DataManager from './components/DataManager'
 import BacktestPanel from './components/BacktestPanel'
+import SignalsPanel from './components/SignalsPanel'
 
 const TABS = [
   { id: 'data', label: 'Data Manager' },
   { id: 'backtest', label: 'Backtesting' },
+  { id: 'signals', label: 'Signals' },
 ]
 
 function App() {
@@ -39,6 +41,7 @@ function App() {
       <main className="main-content">
         {activeTab === 'data'     && <DataManager />}
         {activeTab === 'backtest' && <BacktestPanel />}
+        {activeTab === 'signals'  && <SignalsPanel />}
       </main>
     </div>
   )

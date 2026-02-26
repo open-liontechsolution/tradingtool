@@ -76,5 +76,107 @@ async def init_db() -> None:
                 ON klines (open_time);
             CREATE INDEX IF NOT EXISTS idx_derived_symbol_interval
                 ON derived_metrics (symbol, interval);
+
+            CREATE TABLE IF NOT EXISTS signal_configs (
+                id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+                symbol                  TEXT    NOT NULL,
+                interval                TEXT    NOT NULL,
+                strategy                TEXT    NOT NULL,
+                params                  TEXT    NOT NULL DEFAULT '{}',
+                stop_cross_pct          REAL    NOT NULL DEFAULT 0.02,
+                portfolio               REAL    NOT NULL DEFAULT 10000.0,
+                invested_amount         REAL,
+                leverage                REAL,
+                cost_bps                REAL    NOT NULL DEFAULT 10.0,
+                polling_interval_s      INTEGER,
+                active                  INTEGER NOT NULL DEFAULT 1,
+                last_processed_candle   INTEGER DEFAULT 0,
+                created_at              TEXT    NOT NULL,
+                updated_at              TEXT    NOT NULL
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_signal_configs_unique
+                ON signal_configs (symbol, interval, strategy, params);
+
+            CREATE TABLE IF NOT EXISTS signals (
+                id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+                config_id               INTEGER NOT NULL REFERENCES signal_configs(id),
+                symbol                  TEXT    NOT NULL,
+                interval                TEXT    NOT NULL,
+                strategy                TEXT    NOT NULL,
+                side                    TEXT    NOT NULL,
+                trigger_candle_time     INTEGER NOT NULL,
+                stop_price              REAL    NOT NULL,
+                stop_trigger_price      REAL    NOT NULL,
+                status                  TEXT    NOT NULL DEFAULT 'pending',
+                created_at              TEXT    NOT NULL
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_signals_dedup
+                ON signals (config_id, trigger_candle_time);
+            CREATE INDEX IF NOT EXISTS idx_signals_config
+                ON signals (config_id);
+
+            CREATE TABLE IF NOT EXISTS sim_trades (
+                id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+                signal_id               INTEGER NOT NULL REFERENCES signals(id),
+                config_id               INTEGER NOT NULL REFERENCES signal_configs(id),
+                symbol                  TEXT    NOT NULL,
+                interval                TEXT    NOT NULL,
+                side                    TEXT    NOT NULL,
+                entry_price             REAL,
+                entry_time              INTEGER,
+                stop_base               REAL    NOT NULL,
+                stop_trigger            REAL    NOT NULL,
+                exit_price              REAL,
+                exit_time               INTEGER,
+                exit_reason             TEXT,
+                status                  TEXT    NOT NULL DEFAULT 'pending_entry',
+                portfolio               REAL    NOT NULL,
+                invested_amount         REAL    NOT NULL,
+                leverage                REAL    NOT NULL,
+                quantity                REAL,
+                pnl                     REAL,
+                pnl_pct                 REAL,
+                fees                    REAL,
+                equity_peak             REAL,
+                created_at              TEXT    NOT NULL,
+                updated_at              TEXT    NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_sim_trades_status
+                ON sim_trades (status);
+            CREATE INDEX IF NOT EXISTS idx_sim_trades_config
+                ON sim_trades (config_id);
+
+            CREATE TABLE IF NOT EXISTS real_trades (
+                id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+                sim_trade_id            INTEGER REFERENCES sim_trades(id),
+                signal_id               INTEGER REFERENCES signals(id),
+                symbol                  TEXT    NOT NULL,
+                side                    TEXT    NOT NULL,
+                entry_price             REAL    NOT NULL,
+                entry_time              TEXT    NOT NULL,
+                exit_price              REAL,
+                exit_time               TEXT,
+                quantity                REAL    NOT NULL,
+                fees                    REAL    DEFAULT 0.0,
+                pnl                     REAL,
+                pnl_pct                 REAL,
+                notes                   TEXT,
+                status                  TEXT    NOT NULL DEFAULT 'open',
+                created_at              TEXT    NOT NULL,
+                updated_at              TEXT    NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_real_trades_sim
+                ON real_trades (sim_trade_id);
+
+            CREATE TABLE IF NOT EXISTS notification_log (
+                id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_type              TEXT    NOT NULL,
+                reference_type          TEXT    NOT NULL,
+                reference_id            INTEGER NOT NULL,
+                message                 TEXT,
+                sent_at                 TEXT    NOT NULL
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_notification_dedup
+                ON notification_log (event_type, reference_type, reference_id);
         """)
         await db.commit()
