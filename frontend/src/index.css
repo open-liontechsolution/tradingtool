@@ -676,3 +676,26 @@ select.form-control option {
 .param-help-wrap:hover .param-tooltip {
   display: block;
 }
+
+/* ---- Config badge popover ---- */
+.config-badge-wrap .config-badge-popover {
+  display: none;
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  background: var(--bg-card);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  padding: 8px 12px;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  line-height: 1.7;
+  white-space: nowrap;
+  z-index: 200;
+  box-shadow: var(--shadow-card);
+  pointer-events: none;
+}
+
+.config-badge-wrap:hover .config-badge-popover {
+  display: block;
+}

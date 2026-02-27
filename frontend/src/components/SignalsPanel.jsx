@@ -33,6 +33,40 @@ function fmtIso(iso) {
   return new Date(iso).toLocaleString()
 }
 
+function fmtConfigParams(raw) {
+  if (!raw) return ''
+  try {
+    const obj = typeof raw === 'string' ? JSON.parse(raw) : raw
+    return Object.entries(obj).map(([k, v]) => `${k}: ${v}`).join('\n')
+  } catch { return '' }
+}
+
+function ConfigBadge({ configId, strategy, params }) {
+  const lines = fmtConfigParams(params)
+  return (
+    <span style={{ position: 'relative', display: 'inline-block' }} className="config-badge-wrap">
+      <span
+        style={{
+          display: 'inline-flex', alignItems: 'center', gap: 4,
+          padding: '2px 8px', borderRadius: 'var(--radius-sm)',
+          background: 'var(--bg-elevated)', border: '1px solid var(--border-default)',
+          fontSize: '0.75rem', cursor: lines ? 'default' : 'default',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-muted)', fontWeight: 600 }}>#{configId}</span>
+        <span style={{ color: 'var(--text-secondary)' }}>{strategy}</span>
+        {lines && <span style={{ color: 'var(--text-muted)', fontSize: '0.65rem' }}>ⓘ</span>}
+      </span>
+      {lines && (
+        <span className="config-badge-popover">
+          {lines.split('\n').map((l, i) => <span key={i} style={{ display: 'block' }}>{l}</span>)}
+        </span>
+      )}
+    </span>
+  )
+}
+
 /* ---- Status badge ---- */
 function StatusBadge({ status }) {
   const colors = {
@@ -377,6 +411,7 @@ function SignalsList({ signals }) {
           <thead>
             <tr>
               <th>ID</th>
+              <th>Config</th>
               <th>Symbol</th>
               <th>Side</th>
               <th>Signal Candle</th>
@@ -398,6 +433,9 @@ function SignalsList({ signals }) {
               return (
                 <tr key={s.id}>
                   <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}>{s.id}</td>
+                  <td>
+                    <ConfigBadge configId={s.config_id} strategy={s.strategy} params={s.config_params} />
+                  </td>
                   <td>{s.symbol}</td>
                   <td style={{ color: s.side === 'long' ? 'var(--color-success)' : 'var(--color-danger)', fontWeight: 700 }}>
                     {s.side?.toUpperCase()}
@@ -436,6 +474,7 @@ function SimTradesList({ trades, onClose }) {
         <thead>
           <tr>
             <th>ID</th>
+            <th>Config</th>
             <th>Symbol</th>
             <th>Side</th>
             <th>Entry</th>
@@ -454,6 +493,9 @@ function SimTradesList({ trades, onClose }) {
             return (
               <tr key={t.id}>
                 <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}>{t.id}</td>
+                <td>
+                  <ConfigBadge configId={t.config_id} strategy={t.config_strategy} params={t.config_params} />
+                </td>
                 <td>{t.symbol}</td>
                 <td style={{ color: t.side === 'long' ? 'var(--color-success)' : 'var(--color-danger)', fontWeight: 600 }}>
                   {t.side?.toUpperCase()}

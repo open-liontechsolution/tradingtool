@@ -76,6 +76,16 @@ async def _signal_exists(config_id: int, trigger_candle_time: int) -> bool:
         return await cursor.fetchone() is not None
 
 
+async def _has_active_trade(config_id: int) -> bool:
+    """Return True if there is already a pending or open sim_trade for this config."""
+    async with get_db() as db:
+        cursor = await db.execute(
+            "SELECT 1 FROM sim_trades WHERE config_id = ? AND status IN ('pending_entry', 'open')",
+            (config_id,),
+        )
+        return await cursor.fetchone() is not None
+
+
 async def _update_last_processed(config_id: int, candle_time: int) -> None:
     async with get_db() as db:
         await db.execute(
@@ -174,6 +184,15 @@ async def scan_config(config: dict) -> None:
 
     if last_closed <= last_processed:
         return  # already processed
+
+    # Skip entry signal if there is already an active trade for this config
+    if await _has_active_trade(config["id"]):
+        logger.debug(
+            "Config %d already has an active trade, skipping entry scan for candle %d",
+            config["id"], last_closed,
+        )
+        await _update_last_processed(config["id"], last_closed)
+        return
 
     # Load candles for strategy warmup
     step_ms = INTERVAL_MS[interval]

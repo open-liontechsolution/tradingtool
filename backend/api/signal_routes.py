@@ -225,9 +225,11 @@ async def list_signals(
                st.id       AS sim_trade_id,
                st.entry_price,
                st.entry_time,
-               st.status   AS sim_trade_status
+               st.status   AS sim_trade_status,
+               sc.params   AS config_params
         FROM signals s
         LEFT JOIN sim_trades st ON st.signal_id = s.id
+        LEFT JOIN signal_configs sc ON s.config_id = sc.id
         WHERE 1=1
     """
     params: list[Any] = []
@@ -301,15 +303,20 @@ async def list_sim_trades(
     limit: int = Query(50, le=500),
 ) -> dict:
     """List SimTrades."""
-    query = "SELECT * FROM sim_trades WHERE 1=1"
+    query = """
+        SELECT st.*, sc.strategy AS config_strategy, sc.params AS config_params
+        FROM sim_trades st
+        LEFT JOIN signal_configs sc ON st.config_id = sc.id
+        WHERE 1=1
+    """
     params: list[Any] = []
     if config_id is not None:
-        query += " AND config_id = ?"
+        query += " AND st.config_id = ?"
         params.append(config_id)
     if status is not None:
-        query += " AND status = ?"
+        query += " AND st.status = ?"
         params.append(status)
-    query += f" ORDER BY id DESC LIMIT {limit}"
+    query += f" ORDER BY st.id DESC LIMIT {limit}"
 
     async with get_db() as db:
         cursor = await db.execute(query, params)
