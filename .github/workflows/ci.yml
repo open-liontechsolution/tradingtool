@@ -4,9 +4,8 @@ on:
   pull_request:
     branches:
       - develop
-  push:
-    branches: [develop]        # 👈 temporal para “registrar” los checks en develop
-  workflow_dispatch:           # 👈 opcional pero útil
+    paths-ignore:
+      - ".github/workflows/**"
 
 jobs:
   lint-backend:
