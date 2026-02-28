@@ -163,7 +163,7 @@ function ParamForm({ params, values, onChange, disabled }) {
 }
 
 /* ---- Summary metrics grid ---- */
-function MetricsGrid({ summary, capital, liquidated }) {
+function MetricsGrid({ summary, liquidated }) {
   if (!summary || Object.keys(summary).length === 0) return null
 
   const np = summary.net_profit ?? 0
@@ -289,7 +289,7 @@ export default function BacktestPanel() {
 
   const [loading,    setLoading]    = useState(false)
   const [error,      setError]      = useState(null)
-  const [resultId,   setResultId]   = useState(null)
+  const [_resultId,  setResultId]   = useState(null)
   const [result,     setResult]     = useState(null)
   const [loadingRes, setLoadingRes] = useState(false)
 

@@ -1,7 +1,9 @@
 """FastAPI application factory. Mounts API routes and serves frontend static files."""
+
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -12,14 +14,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-logger = logging.getLogger(__name__)
-
-from backend.database import init_db
-from backend.api.data_routes import router as data_router
 from backend.api.backtest_routes import router as backtest_router
+from backend.api.data_routes import router as data_router
 from backend.api.signal_routes import router as signal_router
-from backend.signal_engine import run_signal_scanner
+from backend.database import init_db
 from backend.live_tracker import run_live_tracker
+from backend.signal_engine import run_signal_scanner
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -30,14 +32,10 @@ async def lifespan(app: FastAPI):
     yield
     scanner_task.cancel()
     tracker_task.cancel()
-    try:
+    with contextlib.suppress(asyncio.CancelledError):
         await scanner_task
-    except asyncio.CancelledError:
-        pass
-    try:
+    with contextlib.suppress(asyncio.CancelledError):
         await tracker_task
-    except asyncio.CancelledError:
-        pass
 
 
 app = FastAPI(
@@ -59,6 +57,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     body = await request.body()
     logger.error("422 on %s %s — body: %s — errors: %s", request.method, request.url.path, body.decode(), exc.errors())
     return JSONResponse(status_code=422, content={"detail": exc.errors(), "body": body.decode()})
+
 
 app.include_router(data_router, prefix="/api")
 app.include_router(backtest_router, prefix="/api")

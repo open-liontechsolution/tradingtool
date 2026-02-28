@@ -1,4 +1,5 @@
 """Support/Resistance strategy: zigzag-based swing detection with breakout entries."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -19,18 +20,21 @@ class SupportResistanceStrategy(Strategy):
 
     def get_parameters(self) -> list[ParameterDef]:
         return [
-            ParameterDef("reversal_pct", "float", 0.03, 0.005, 0.5,
-                         "Minimum % reversal from extreme to confirm a swing point (e.g. 0.03 = 3%)"),
-            ParameterDef("stop_pct", "float", 0.02, 0.001, 0.5,
-                         "Stop loss percentage from support/resistance level"),
-            ParameterDef("modo_ejecucion", "str", "open_next", None, None,
-                         "Execution mode: 'open_next' or 'close_current'"),
-            ParameterDef("habilitar_long", "bool", True, None, None,
-                         "Enable long entries"),
-            ParameterDef("habilitar_short", "bool", True, None, None,
-                         "Enable short entries"),
-            ParameterDef("coste_total_bps", "float", 10.0, 0.0, 100.0,
-                         "Round-trip transaction cost in basis points"),
+            ParameterDef(
+                "reversal_pct",
+                "float",
+                0.03,
+                0.005,
+                0.5,
+                "Minimum % reversal from extreme to confirm a swing point (e.g. 0.03 = 3%)",
+            ),
+            ParameterDef("stop_pct", "float", 0.02, 0.001, 0.5, "Stop loss percentage from support/resistance level"),
+            ParameterDef(
+                "modo_ejecucion", "str", "open_next", None, None, "Execution mode: 'open_next' or 'close_current'"
+            ),
+            ParameterDef("habilitar_long", "bool", True, None, None, "Enable long entries"),
+            ParameterDef("habilitar_short", "bool", True, None, None, "Enable short entries"),
+            ParameterDef("coste_total_bps", "float", 10.0, 0.0, 100.0, "Round-trip transaction cost in basis points"),
         ]
 
     # ------------------------------------------------------------------
@@ -57,35 +61,30 @@ class SupportResistanceStrategy(Strategy):
         #            'down' means we are tracking towards a potential swing low
         direction = "up"
         current_high = highs[0]
-        current_high_idx = 0
         current_low = lows[0]
-        current_low_idx = 0
 
         confirmed_support = np.nan
         confirmed_resistance = np.nan
 
         for t in range(n):
             h = highs[t]
-            l = lows[t]
+            low_t = lows[t]
 
             if direction == "up":
                 # Looking for a swing high
                 if h > current_high:
                     current_high = h
-                    current_high_idx = t
                 # Check if price has reversed enough from the running high
-                if current_high > 0 and l <= current_high * (1.0 - reversal_pct):
+                if current_high > 0 and low_t <= current_high * (1.0 - reversal_pct):
                     # Confirm the swing high as resistance
                     confirmed_resistance = current_high
                     # Now switch to looking for a swing low
                     direction = "down"
-                    current_low = l
-                    current_low_idx = t
+                    current_low = low_t
             else:
                 # Looking for a swing low
-                if l < current_low:
-                    current_low = l
-                    current_low_idx = t
+                if low_t < current_low:
+                    current_low = low_t
                 # Check if price has reversed enough from the running low
                 if current_low > 0 and h >= current_low * (1.0 + reversal_pct):
                     # Confirm the swing low as support
@@ -93,7 +92,6 @@ class SupportResistanceStrategy(Strategy):
                     # Now switch to looking for a swing high
                     direction = "up"
                     current_high = h
-                    current_high_idx = t
 
             last_support[t] = confirmed_support
             last_resistance[t] = confirmed_resistance

@@ -1,8 +1,8 @@
 """REST API routes for data management: download, candles, rate limit, metrics."""
+
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
@@ -11,8 +11,8 @@ from pydantic import BaseModel
 from backend.binance_client import binance_client
 from backend.database import get_db
 from backend.download_engine import (
-    create_download_job,
     cancel_job,
+    create_download_job,
     get_job,
     start_download_job_task,
 )
@@ -22,8 +22,16 @@ router = APIRouter(tags=["data"])
 
 # Common pairs the UI surfaces by default
 KNOWN_PAIRS = [
-    "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
-    "ADAUSDT", "DOGEUSDT", "AVAXUSDT", "DOTUSDT", "LINKUSDT",
+    "BTCUSDT",
+    "ETHUSDT",
+    "BNBUSDT",
+    "SOLUSDT",
+    "XRPUSDT",
+    "ADAUSDT",
+    "DOGEUSDT",
+    "AVAXUSDT",
+    "DOTUSDT",
+    "LINKUSDT",
 ]
 
 VALID_INTERVALS = ["1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "3d", "1w", "1M"]
@@ -33,7 +41,7 @@ class DownloadRequest(BaseModel):
     symbol: str
     interval: str
     start_time: int  # ms timestamp
-    end_time: int    # ms timestamp
+    end_time: int  # ms timestamp
 
 
 class MetricsRequest(BaseModel):
@@ -48,9 +56,7 @@ class MetricsRequest(BaseModel):
 async def list_pairs() -> dict:
     """List available pairs (known defaults + ones stored in DB)."""
     async with get_db() as db:
-        cursor = await db.execute(
-            "SELECT DISTINCT symbol FROM klines ORDER BY symbol"
-        )
+        cursor = await db.execute("SELECT DISTINCT symbol FROM klines ORDER BY symbol")
         rows = await cursor.fetchall()
     stored = [row[0] for row in rows]
     merged = sorted(set(KNOWN_PAIRS) | set(stored))
@@ -65,9 +71,7 @@ async def start_download(req: DownloadRequest) -> dict:
     if req.end_time <= req.start_time:
         raise HTTPException(400, "end_time must be > start_time")
 
-    job_id = await create_download_job(
-        req.symbol.upper(), req.interval, req.start_time, req.end_time
-    )
+    job_id = await create_download_job(req.symbol.upper(), req.interval, req.start_time, req.end_time)
     start_download_job_task(job_id)
     return {"job_id": job_id, "status": "started"}
 
@@ -115,7 +119,7 @@ async def get_candles(
         rows = await cursor.fetchall()
         cols = [d[0] for d in cursor.description]
 
-    candles = [dict(zip(cols, row)) for row in rows]
+    candles = [dict(zip(cols, row, strict=False)) for row in rows]
     return {"candles": candles, "count": len(candles)}
 
 

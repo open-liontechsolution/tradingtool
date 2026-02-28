@@ -1,7 +1,9 @@
 """Binance API client with rate limiting, retry logic, and backoff handling."""
+
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import random
 import time
@@ -98,10 +100,8 @@ class BinanceClient:
     def _parse_rate_limit_headers(self, headers: httpx.Headers) -> None:
         weight_str = headers.get("X-MBX-USED-WEIGHT-1M") or headers.get("x-mbx-used-weight-1m")
         if weight_str:
-            try:
+            with contextlib.suppress(ValueError):
                 self.rate_limit.used_weight = int(weight_str)
-            except ValueError:
-                pass
 
     async def get_klines(
         self,
@@ -207,7 +207,7 @@ class BinanceClient:
 
 def _exponential_backoff(attempt: int, base: float = 1.0, cap: float = 60.0) -> float:
     """Exponential backoff with jitter."""
-    delay = min(base * (2 ** attempt), cap)
+    delay = min(base * (2**attempt), cap)
     return delay * (0.5 + random.random() * 0.5)
 
 
@@ -238,9 +238,9 @@ def validate_candle(candle: dict) -> bool:
     try:
         o = float(candle["open"])
         h = float(candle["high"])
-        l = float(candle["low"])
+        low_v = float(candle["low"])
         c = float(candle["close"])
-        return h >= max(o, c) and l <= min(o, c) and l > 0 and h > 0
+        return h >= max(o, c) and low_v <= min(o, c) and low_v > 0 and h > 0
     except (ValueError, KeyError):
         return False
 

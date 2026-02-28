@@ -127,7 +127,7 @@ export default function TradeReviewChart({ symbol, interval, startMs, endMs, tra
 
             // Exit marker
             const exitReason = trade.exit_reason ?? 'exit'
-            const isStop = exitReason.includes('stop')
+            const _isStop = exitReason.includes('stop')
             markers.push({
               time: exitTime,
               position: isLong ? 'aboveBar' : 'belowBar',

@@ -1,4 +1,5 @@
 """Breakout strategy: close-based breakout with percentage stop and exit on reversal."""
+
 from __future__ import annotations
 
 import pandas as pd
@@ -17,20 +18,17 @@ class BreakoutStrategy(Strategy):
 
     def get_parameters(self) -> list[ParameterDef]:
         return [
-            ParameterDef("N_entrada", "int", 20, 2, 500,
-                         "Lookback window for breakout detection (exclusive of current candle)"),
-            ParameterDef("M_salida", "int", 10, 1, 500,
-                         "Lookback window for exit signal"),
-            ParameterDef("stop_pct", "float", 0.02, 0.001, 0.5,
-                         "Stop loss percentage from entry reference level"),
-            ParameterDef("modo_ejecucion", "str", "open_next", None, None,
-                         "Execution mode: 'open_next' or 'close_current'"),
-            ParameterDef("habilitar_long", "bool", True, None, None,
-                         "Enable long entries"),
-            ParameterDef("habilitar_short", "bool", True, None, None,
-                         "Enable short entries"),
-            ParameterDef("coste_total_bps", "float", 10.0, 0.0, 100.0,
-                         "Round-trip transaction cost in basis points"),
+            ParameterDef(
+                "N_entrada", "int", 20, 2, 500, "Lookback window for breakout detection (exclusive of current candle)"
+            ),
+            ParameterDef("M_salida", "int", 10, 1, 500, "Lookback window for exit signal"),
+            ParameterDef("stop_pct", "float", 0.02, 0.001, 0.5, "Stop loss percentage from entry reference level"),
+            ParameterDef(
+                "modo_ejecucion", "str", "open_next", None, None, "Execution mode: 'open_next' or 'close_current'"
+            ),
+            ParameterDef("habilitar_long", "bool", True, None, None, "Enable long entries"),
+            ParameterDef("habilitar_short", "bool", True, None, None, "Enable short entries"),
+            ParameterDef("coste_total_bps", "float", 10.0, 0.0, 100.0, "Round-trip transaction cost in basis points"),
         ]
 
     def init(self, params: dict, candles: pd.DataFrame) -> None:

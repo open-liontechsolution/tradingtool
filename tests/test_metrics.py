@@ -1,15 +1,14 @@
 """Tests for backtest_metrics and metrics_engine: Sharpe, max drawdown, win rate, etc."""
+
 from __future__ import annotations
 
 import math
-import pytest
-import numpy as np
+
 import pandas as pd
 
-from backend.backtest_metrics import compute_backtest_metrics, _candles_per_year
-from backend.metrics_engine import compute_metrics
+from backend.backtest_metrics import _candles_per_year, compute_backtest_metrics
 from backend.download_engine import INTERVAL_MS
-
+from backend.metrics_engine import compute_metrics
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -24,14 +23,16 @@ def _make_df(closes, highs=None, lows=None) -> pd.DataFrame:
         highs = [c + 1.0 for c in closes]
     if lows is None:
         lows = [c - 1.0 for c in closes]
-    return pd.DataFrame({
-        "open_time": [DAY_MS * i for i in range(n)],
-        "open": [float(c) for c in closes],
-        "high": [float(h) for h in highs],
-        "low": [float(l) for l in lows],
-        "close": [float(c) for c in closes],
-        "volume": [1000.0] * n,
-    })
+    return pd.DataFrame(
+        {
+            "open_time": [DAY_MS * i for i in range(n)],
+            "open": [float(c) for c in closes],
+            "high": [float(h) for h in highs],
+            "low": [float(low_v) for low_v in lows],
+            "close": [float(c) for c in closes],
+            "volume": [1000.0] * n,
+        }
+    )
 
 
 def _trade(pnl: float, duration: int = 1) -> dict:
@@ -51,6 +52,7 @@ def _trade(pnl: float, duration: int = 1) -> dict:
 # ===========================================================================
 # backtest_metrics
 # ===========================================================================
+
 
 class TestNetProfit:
     def test_positive_net_profit(self):
@@ -83,7 +85,7 @@ class TestMaxDrawdown:
         assert abs(m["max_drawdown_pct"] - (-50.0)) < 0.01
 
     def test_drawdown_from_initial(self):
-        eq = [100.0, 80.0, 60.0]   # drops from 100 to 60 = -40%
+        eq = [100.0, 80.0, 60.0]  # drops from 100 to 60 = -40%
         m = compute_backtest_metrics(eq, [], 100.0, DAY_MS)
         assert abs(m["max_drawdown_pct"] - (-40.0)) < 0.01
 
@@ -146,12 +148,12 @@ class TestExpectancy:
 class TestSharpeRatio:
     def test_sharpe_positive_for_consistent_gains(self):
         # Consistent upward equity -> positive Sharpe
-        eq = [10_000.0 * (1.001 ** i) for i in range(252)]
+        eq = [10_000.0 * (1.001**i) for i in range(252)]
         m = compute_backtest_metrics(eq, [], 10_000.0, DAY_MS)
         assert m["sharpe"] > 0
 
     def test_sharpe_negative_for_consistent_losses(self):
-        eq = [10_000.0 * (0.999 ** i) for i in range(252)]
+        eq = [10_000.0 * (0.999**i) for i in range(252)]
         m = compute_backtest_metrics(eq, [], 10_000.0, DAY_MS)
         assert m["sharpe"] < 0
 
@@ -165,6 +167,7 @@ class TestSortinoRatio:
     def test_sortino_positive_for_gains(self):
         # Use noisy but upward-trending equity so there are some downside candles
         import random
+
         random.seed(42)
         eq = [10_000.0]
         for _ in range(251):
@@ -239,6 +242,7 @@ class TestCandlesPerYear:
 # ===========================================================================
 # metrics_engine.compute_metrics
 # ===========================================================================
+
 
 class TestComputeMetricsSMA:
     def test_sma_20_correct(self):
@@ -328,15 +332,28 @@ class TestComputeMetricsAll:
         df = _make_df([float(i + 100) for i in range(250)])
         result = compute_metrics(df)
         expected_keys = {
-            "returns_log", "returns_simple", "range", "true_range",
-            "sma_20", "sma_50", "sma_200",
-            "ema_20", "ema_50", "ema_200",
-            "volatility_20", "volatility_50",
-            "atr_14", "atr_20",
-            "rolling_max_20", "rolling_max_50",
-            "rolling_min_20", "rolling_min_50",
-            "donchian_upper_20", "donchian_upper_50",
-            "donchian_lower_20", "donchian_lower_50",
+            "returns_log",
+            "returns_simple",
+            "range",
+            "true_range",
+            "sma_20",
+            "sma_50",
+            "sma_200",
+            "ema_20",
+            "ema_50",
+            "ema_200",
+            "volatility_20",
+            "volatility_50",
+            "atr_14",
+            "atr_20",
+            "rolling_max_20",
+            "rolling_max_50",
+            "rolling_min_20",
+            "rolling_min_50",
+            "donchian_upper_20",
+            "donchian_upper_50",
+            "donchian_lower_20",
+            "donchian_lower_50",
         }
         assert expected_keys.issubset(set(result.keys()))
 

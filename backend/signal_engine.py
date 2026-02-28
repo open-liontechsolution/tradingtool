@@ -1,12 +1,12 @@
 """Signal scanner: detects entry signals on closed candles using strategy plugins."""
+
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
 import time
-from datetime import datetime, timezone
-from typing import Any
+from datetime import UTC, datetime
 
 from backend.database import get_db
 from backend.download_engine import INTERVAL_MS, ensure_candles
@@ -36,7 +36,7 @@ MIN_HISTORY_MS = 365 * 86_400_000
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _now_ms() -> int:
@@ -58,12 +58,10 @@ def _last_closed_candle_time(interval: str) -> int:
 async def _get_active_configs() -> list[dict]:
     """Load all active signal configs from DB."""
     async with get_db() as db:
-        cursor = await db.execute(
-            "SELECT * FROM signal_configs WHERE active = 1"
-        )
+        cursor = await db.execute("SELECT * FROM signal_configs WHERE active = 1")
         rows = await cursor.fetchall()
         cols = [d[0] for d in cursor.description]
-    return [dict(zip(cols, row)) for row in rows]
+    return [dict(zip(cols, row, strict=False)) for row in rows]
 
 
 async def _signal_exists(config_id: int, trigger_candle_time: int) -> bool:
@@ -106,10 +104,7 @@ async def _create_signal_and_sim_trade(
     now = _now_iso()
 
     # Compute stop_trigger from stop_base and stop_cross_pct
-    if side == "long":
-        stop_trigger = stop_price * (1.0 - stop_cross_pct)
-    else:
-        stop_trigger = stop_price * (1.0 + stop_cross_pct)
+    stop_trigger = stop_price * (1.0 - stop_cross_pct) if side == "long" else stop_price * (1.0 + stop_cross_pct)
 
     # Resolve portfolio/invested/leverage
     portfolio = float(config["portfolio"])
@@ -125,8 +120,6 @@ async def _create_signal_and_sim_trade(
         leverage = 1.0
         invested_amount = portfolio
 
-    cost_bps = float(config["cost_bps"])
-
     async with get_db() as db:
         try:
             cursor = await db.execute(
@@ -136,9 +129,15 @@ async def _create_signal_and_sim_trade(
                      status, created_at)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)""",
                 (
-                    config["id"], config["symbol"], config["interval"],
-                    config["strategy"], side, trigger_candle_time,
-                    stop_price, stop_trigger, now,
+                    config["id"],
+                    config["symbol"],
+                    config["interval"],
+                    config["strategy"],
+                    side,
+                    trigger_candle_time,
+                    stop_price,
+                    stop_trigger,
+                    now,
                 ),
             )
             signal_id = cursor.lastrowid
@@ -156,17 +155,30 @@ async def _create_signal_and_sim_trade(
                VALUES (?, ?, ?, ?, ?, ?, ?, 'pending_entry',
                        ?, ?, ?, ?, ?, ?)""",
             (
-                signal_id, config["id"], config["symbol"], config["interval"],
-                side, stop_price, stop_trigger,
-                portfolio, invested_amount, leverage, 0.0,
-                now, now,
+                signal_id,
+                config["id"],
+                config["symbol"],
+                config["interval"],
+                side,
+                stop_price,
+                stop_trigger,
+                portfolio,
+                invested_amount,
+                leverage,
+                0.0,
+                now,
+                now,
             ),
         )
         await db.commit()
 
     logger.info(
         "Signal created: config=%d side=%s candle=%d stop=%.6f trigger=%.6f",
-        config["id"], side, trigger_candle_time, stop_price, stop_trigger,
+        config["id"],
+        side,
+        trigger_candle_time,
+        stop_price,
+        stop_trigger,
     )
     return signal_id
 
@@ -189,7 +201,8 @@ async def scan_config(config: dict) -> None:
     if await _has_active_trade(config["id"]):
         logger.debug(
             "Config %d already has an active trade, skipping entry scan for candle %d",
-            config["id"], last_closed,
+            config["id"],
+            last_closed,
         )
         await _update_last_processed(config["id"], last_closed)
         return
@@ -206,7 +219,8 @@ async def scan_config(config: dict) -> None:
     if not ready:
         logger.info(
             "ensure_candles: data sync in progress for %s %s, skipping scan cycle",
-            symbol, interval,
+            symbol,
+            interval,
         )
         return
 
@@ -219,7 +233,10 @@ async def scan_config(config: dict) -> None:
     if int(df.iloc[-1]["open_time"]) != last_closed:
         logger.warning(
             "Last closed candle %d not in DB for %s %s (latest: %d). Skipping.",
-            last_closed, symbol, interval, int(df.iloc[-1]["open_time"]),
+            last_closed,
+            symbol,
+            interval,
+            int(df.iloc[-1]["open_time"]),
         )
         return
 

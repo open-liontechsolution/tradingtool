@@ -341,7 +341,7 @@ function ConfigForm({ strategies, onCreated }) {
 }
 
 /* ---- Configs list ---- */
-function ConfigsList({ configs, onToggle, onDelete, onRefresh }) {
+function ConfigsList({ configs, onToggle, onDelete }) {
   if (!configs || configs.length === 0) {
     return <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem', padding: 'var(--space-3)' }}>No signal configs yet.</div>
   }
@@ -522,7 +522,7 @@ function SimTradesList({ trades, onClose }) {
 }
 
 /* ---- Real Trades section ---- */
-function RealTradesSection({ simTrades }) {
+function RealTradesSection() {
   const [realTrades, setRealTrades] = useState([])
   const [showForm, setShowForm] = useState(false)
   const [form, setForm] = useState({
@@ -540,6 +540,7 @@ function RealTradesSection({ simTrades }) {
     } catch { /* ignore */ }
   }, [])
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { fetchRealTrades() }, [fetchRealTrades])
 
   const handleCreate = async () => {
@@ -569,7 +570,7 @@ function RealTradesSection({ simTrades }) {
     setLoading(false)
   }
 
-  const handleClose = async (id, exitPrice, fees) => {
+  const _handleClose = async (id, exitPrice, fees) => {
     await fetch(`/api/real-trades/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -845,6 +846,7 @@ export default function SignalsPanel() {
   }, [fetchConfigs, fetchSignals, fetchSimTrades, fetchStatus])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchStrategies()
     refreshAll()
     const iv = window.setInterval(refreshAll, 15000)

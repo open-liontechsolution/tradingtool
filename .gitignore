@@ -42,3 +42,9 @@ Thumbs.db
 
 # Windsurf plans (local session artifacts)
 .windsurf/
+
+# Ruff cache
+.ruff_cache/
+
+# Alembic generated (keep versions/ tracked, ignore auto-generated cache)
+alembic/__pycache__/

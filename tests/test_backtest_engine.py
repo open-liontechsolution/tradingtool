@@ -1,19 +1,14 @@
 """Tests for backtest_engine: trade signals, stop loss, bankruptcy detection."""
+
 from __future__ import annotations
 
-import os
-import pytest
-import pytest_asyncio
-import aiosqlite
-from pathlib import Path
-
 import pandas as pd
+import pytest
 
-from backend.backtest_engine import run_backtest, _compute_pnl, _compute_pnl_no_fees
-from backend.strategies.base import PositionState
-from backend.download_engine import INTERVAL_MS
 import backend.backtest_engine as _be_module
-
+from backend.backtest_engine import _compute_pnl, _compute_pnl_no_fees, run_backtest
+from backend.download_engine import INTERVAL_MS
+from backend.strategies.base import PositionState
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -70,8 +65,12 @@ def _candles_to_df(candles: list[dict]) -> pd.DataFrame:
         return pd.DataFrame()
     rows = [
         (
-            c["open_time"], float(c["open"]), float(c["high"]),
-            float(c["low"]), float(c["close"]), float(c["volume"]),
+            c["open_time"],
+            float(c["open"]),
+            float(c["high"]),
+            float(c["low"]),
+            float(c["close"]),
+            float(c["volume"]),
         )
         for c in candles
     ]
@@ -117,6 +116,7 @@ def _build_flat_candles(n: int = 60, price: float = 100.0):
 # _compute_pnl helpers
 # ---------------------------------------------------------------------------
 
+
 class TestComputePnl:
     def test_long_profit(self):
         state = PositionState(side="long", entry_price=100.0, quantity=10.0)
@@ -148,6 +148,7 @@ class TestComputePnl:
 # Fixture: patch load_candles_df on the backtest_engine module directly
 # ---------------------------------------------------------------------------
 
+
 def _patch_candles(monkeypatch, candles: list[dict]):
     """Patch backtest_engine.load_candles_df to return candles as a DataFrame."""
     df = _candles_to_df(candles)
@@ -161,6 +162,7 @@ def _patch_candles(monkeypatch, candles: list[dict]):
 # ---------------------------------------------------------------------------
 # Backtest engine integration
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_insufficient_data_returns_error(monkeypatch):
@@ -188,8 +190,7 @@ async def test_flat_market_produces_no_trades(monkeypatch):
         start_ms=0,
         end_ms=step * 60,
         strategy_name="breakout",
-        params={"N_entrada": 20, "M_salida": 10, "stop_pct": 0.05,
-                "habilitar_long": True, "habilitar_short": True},
+        params={"N_entrada": 20, "M_salida": 10, "stop_pct": 0.05, "habilitar_long": True, "habilitar_short": True},
         initial_capital=10_000.0,
     )
     assert result.error is None
@@ -208,8 +209,7 @@ async def test_trending_market_produces_trades(monkeypatch):
         start_ms=0,
         end_ms=step * 100,
         strategy_name="breakout",
-        params={"N_entrada": 20, "M_salida": 10, "stop_pct": 0.05,
-                "habilitar_long": True, "habilitar_short": False},
+        params={"N_entrada": 20, "M_salida": 10, "stop_pct": 0.05, "habilitar_long": True, "habilitar_short": False},
         initial_capital=10_000.0,
     )
     assert result.error is None
@@ -263,13 +263,21 @@ async def test_trade_log_fields_present(monkeypatch):
         start_ms=0,
         end_ms=step * 100,
         strategy_name="breakout",
-        params={"N_entrada": 20, "M_salida": 10, "stop_pct": 0.05,
-                "habilitar_long": True, "habilitar_short": False},
+        params={"N_entrada": 20, "M_salida": 10, "stop_pct": 0.05, "habilitar_long": True, "habilitar_short": False},
         initial_capital=10_000.0,
     )
     if result.trade_log:
-        required = {"entry_time", "exit_time", "side", "entry_price",
-                    "exit_price", "pnl", "fees", "exit_reason", "duration_candles"}
+        required = {
+            "entry_time",
+            "exit_time",
+            "side",
+            "entry_price",
+            "exit_price",
+            "pnl",
+            "fees",
+            "exit_reason",
+            "duration_candles",
+        }
         for trade in result.trade_log:
             assert required.issubset(set(trade.keys()))
 
@@ -285,10 +293,8 @@ async def test_summary_metrics_present(monkeypatch):
         start_ms=0,
         end_ms=step * 100,
         strategy_name="breakout",
-        params={"N_entrada": 20, "M_salida": 10, "stop_pct": 0.05,
-                "habilitar_long": True, "habilitar_short": False},
+        params={"N_entrada": 20, "M_salida": 10, "stop_pct": 0.05, "habilitar_long": True, "habilitar_short": False},
         initial_capital=10_000.0,
     )
-    required_keys = {"net_profit", "net_profit_pct", "max_drawdown_pct",
-                     "sharpe", "n_trades", "win_rate_pct"}
+    required_keys = {"net_profit", "net_profit_pct", "max_drawdown_pct", "sharpe", "n_trades", "win_rate_pct"}
     assert required_keys.issubset(set(result.summary.keys()))

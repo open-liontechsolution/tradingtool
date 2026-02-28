@@ -1,15 +1,19 @@
 """Tests for signal_engine: scanner logic, dedup, stop_cross_pct calculation."""
+
 from __future__ import annotations
 
-import asyncio
 import json
 import os
-import tempfile
-import pytest
-from unittest.mock import patch, AsyncMock
 
 import pandas as pd
-import numpy as np
+import pytest
+
+from backend.database import get_db, init_db
+from backend.download_engine import INTERVAL_MS
+from backend.signal_engine import (
+    _create_signal_and_sim_trade,
+    _last_closed_candle_time,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -17,38 +21,37 @@ def _use_temp_db(tmp_path):
     db_path = str(tmp_path / "test_signals.db")
     os.environ["DB_PATH"] = db_path
     import backend.database as dbmod
+
     dbmod.DB_PATH = __import__("pathlib").Path(db_path)
     yield
-
-
-from backend.database import init_db, get_db
-from backend.signal_engine import (
-    _last_closed_candle_time,
-    _create_signal_and_sim_trade,
-    scan_config,
-    WARMUP_CANDLES,
-)
-from backend.download_engine import INTERVAL_MS
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_candles_df(n: int, base_open_time: int = 0, step_ms: int = 3_600_000,
-                     base_price: float = 100.0) -> pd.DataFrame:
+
+def _make_candles_df(
+    n: int, base_open_time: int = 0, step_ms: int = 3_600_000, base_price: float = 100.0
+) -> pd.DataFrame:
     """Create a synthetic OHLCV DataFrame."""
     rows = []
     price = base_price
     for i in range(n):
         o = price
         h = price + 2
-        l = price - 2
+        low_v = price - 2
         c = price + 1  # slight uptrend
-        rows.append({
-            "open_time": base_open_time + i * step_ms,
-            "open": o, "high": h, "low": l, "close": c, "volume": 100.0,
-        })
+        rows.append(
+            {
+                "open_time": base_open_time + i * step_ms,
+                "open": o,
+                "high": h,
+                "low": low_v,
+                "close": c,
+                "volume": 100.0,
+            }
+        )
         price = c
     return pd.DataFrame(rows)
 
@@ -59,9 +62,15 @@ async def _setup_db():
 
 
 async def _insert_config(
-    symbol="BTCUSDT", interval="1h", strategy="breakout",
-    params=None, stop_cross_pct=0.02, portfolio=10000.0,
-    leverage=1.0, cost_bps=10.0, active=1,
+    symbol="BTCUSDT",
+    interval="1h",
+    strategy="breakout",
+    params=None,
+    stop_cross_pct=0.02,
+    portfolio=10000.0,
+    leverage=1.0,
+    cost_bps=10.0,
+    active=1,
 ) -> dict:
     if params is None:
         params = {"N_entrada": 5, "M_salida": 3, "stop_pct": 0.02}
@@ -75,23 +84,35 @@ async def _insert_config(
                  polling_interval_s, active, last_processed_candle,
                  created_at, updated_at)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)""",
-            (symbol, interval, strategy, params_json, stop_cross_pct,
-             portfolio, None, leverage, cost_bps, None, active, now, now),
+            (
+                symbol,
+                interval,
+                strategy,
+                params_json,
+                stop_cross_pct,
+                portfolio,
+                None,
+                leverage,
+                cost_bps,
+                None,
+                active,
+                now,
+                now,
+            ),
         )
         await db.commit()
         config_id = cursor.lastrowid
 
-        cursor2 = await db.execute(
-            "SELECT * FROM signal_configs WHERE id = ?", (config_id,)
-        )
+        cursor2 = await db.execute("SELECT * FROM signal_configs WHERE id = ?", (config_id,))
         row = await cursor2.fetchone()
         cols = [d[0] for d in cursor2.description]
-    return dict(zip(cols, row))
+    return dict(zip(cols, row, strict=False))
 
 
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
 
 class TestLastClosedCandleTime:
     def test_1h_returns_past_hour(self):
@@ -99,6 +120,7 @@ class TestLastClosedCandleTime:
         step_ms = INTERVAL_MS["1h"]
         # The result should be at least one step behind now
         import time
+
         now_ms = int(time.time() * 1000)
         assert result < now_ms
         assert result % step_ms == 0
@@ -174,15 +196,21 @@ class TestSignalDedup:
 
         # First creation succeeds
         sid1 = await _create_signal_and_sim_trade(
-            config=config, side="long",
-            trigger_candle_time=5000000, stop_price=95.0, stop_cross_pct=0.02,
+            config=config,
+            side="long",
+            trigger_candle_time=5000000,
+            stop_price=95.0,
+            stop_cross_pct=0.02,
         )
         assert sid1 is not None
 
         # Second with same trigger_candle_time returns None (dedup)
         sid2 = await _create_signal_and_sim_trade(
-            config=config, side="long",
-            trigger_candle_time=5000000, stop_price=95.0, stop_cross_pct=0.02,
+            config=config,
+            side="long",
+            trigger_candle_time=5000000,
+            stop_price=95.0,
+            stop_cross_pct=0.02,
         )
         assert sid2 is None
 
@@ -195,8 +223,11 @@ class TestPortfolioModes:
         config = await _insert_config(portfolio=10000.0, leverage=2.0)
 
         signal_id = await _create_signal_and_sim_trade(
-            config=config, side="long",
-            trigger_candle_time=8000000, stop_price=95.0, stop_cross_pct=0.02,
+            config=config,
+            side="long",
+            trigger_candle_time=8000000,
+            stop_price=95.0,
+            stop_cross_pct=0.02,
         )
         async with get_db() as db:
             cursor = await db.execute(
@@ -207,7 +238,7 @@ class TestPortfolioModes:
         assert row is not None
         assert row[0] == 10000.0  # portfolio
         assert row[1] == 20000.0  # invested_amount = 10000 * 2
-        assert row[2] == 2.0      # leverage
+        assert row[2] == 2.0  # leverage
 
     @pytest.mark.asyncio
     async def test_invested_amount_mode(self):
@@ -224,21 +255,24 @@ class TestPortfolioModes:
                      polling_interval_s, active, last_processed_candle,
                      created_at, updated_at)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)""",
-                ("ETHUSDT", "1d", "breakout", params_json, 0.02,
-                 10000.0, 5000.0, None, 10.0, None, 1, now, now),
+                ("ETHUSDT", "1d", "breakout", params_json, 0.02, 10000.0, 5000.0, None, 10.0, None, 1, now, now),
             )
             await db.commit()
             config_id = cursor.lastrowid
             cursor2 = await db.execute(
-                "SELECT * FROM signal_configs WHERE id = ?", (config_id,),
+                "SELECT * FROM signal_configs WHERE id = ?",
+                (config_id,),
             )
             row = await cursor2.fetchone()
             cols = [d[0] for d in cursor2.description]
-        config = dict(zip(cols, row))
+        config = dict(zip(cols, row, strict=False))
 
         signal_id = await _create_signal_and_sim_trade(
-            config=config, side="short",
-            trigger_candle_time=9000000, stop_price=105.0, stop_cross_pct=0.02,
+            config=config,
+            side="short",
+            trigger_candle_time=9000000,
+            stop_price=105.0,
+            stop_cross_pct=0.02,
         )
         async with get_db() as db:
             cursor = await db.execute(
@@ -259,8 +293,11 @@ class TestSimTradeStatus:
         config = await _insert_config()
 
         signal_id = await _create_signal_and_sim_trade(
-            config=config, side="long",
-            trigger_candle_time=11000000, stop_price=95.0, stop_cross_pct=0.02,
+            config=config,
+            side="long",
+            trigger_candle_time=11000000,
+            stop_price=95.0,
+            stop_cross_pct=0.02,
         )
         async with get_db() as db:
             cursor = await db.execute(
@@ -276,8 +313,11 @@ class TestSimTradeStatus:
         config = await _insert_config()
 
         signal_id = await _create_signal_and_sim_trade(
-            config=config, side="long",
-            trigger_candle_time=12000000, stop_price=95.0, stop_cross_pct=0.02,
+            config=config,
+            side="long",
+            trigger_candle_time=12000000,
+            stop_price=95.0,
+            stop_cross_pct=0.02,
         )
         async with get_db() as db:
             cursor = await db.execute(
