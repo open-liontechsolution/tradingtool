@@ -1,16 +1,111 @@
-"""SQLite database setup with aiosqlite. Schema creation on startup."""
+"""Database abstraction layer: supports SQLite (local dev) and PostgreSQL (k3s dev).
+
+Backend selection is driven by the DATABASE_URL environment variable:
+  - Not set / sqlite:///...  → aiosqlite (default, local development)
+  - postgresql://...         → asyncpg (k3s dev cluster, schema managed by Alembic)
+
+Both backends expose the same get_db() async context manager.
+SQLite init_db() creates the schema on first run; PostgreSQL relies on Alembic migrations.
+"""
+
 from __future__ import annotations
 
-import aiosqlite
-import os
+import re
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from pathlib import Path
+from typing import Any
 
-DB_PATH = Path(os.environ.get("DB_PATH", "data/trading_tools.db"))
+import aiosqlite
+
+from backend.config import DATABASE_URL, DB_PATH, IS_POSTGRES
+
+# ---------------------------------------------------------------------------
+# Placeholder translation: SQLite uses ?, PostgreSQL uses $1 $2 ...
+# ---------------------------------------------------------------------------
+
+
+def _to_pg_placeholders(query: str) -> str:
+    """Replace all ? placeholders with $1, $2, ... for asyncpg."""
+    counter = 0
+
+    def replacer(_match: re.Match) -> str:
+        nonlocal counter
+        counter += 1
+        return f"${counter}"
+
+    return re.sub(r"\?", replacer, query)
+
+
+# ---------------------------------------------------------------------------
+# PostgreSQL connection wrapper (asyncpg)
+# ---------------------------------------------------------------------------
+
+
+class _PgConnection:
+    """Thin wrapper around asyncpg Connection that mimics the aiosqlite API."""
+
+    def __init__(self, conn: Any) -> None:
+        self._conn = conn
+        self._rows: list[dict] | None = None
+        self._last_id: int | None = None
+
+    async def execute(self, query: str, params: tuple | list = ()) -> _PgCursor:
+        pg_query = _to_pg_placeholders(query)
+        q_upper = query.strip().upper()
+        if q_upper.startswith("INSERT") and "RETURNING" not in q_upper:
+            pg_query = pg_query.rstrip().rstrip(";") + " RETURNING id"
+            row = await self._conn.fetchrow(pg_query, *params)
+            self._last_id = row["id"] if row else None
+            return _PgCursor([], self._last_id)
+        rows = await self._conn.fetch(pg_query, *params)
+        records = [dict(r) for r in rows]
+        return _PgCursor(records, None)
+
+    async def executemany(self, query: str, params_seq: list) -> None:
+        pg_query = _to_pg_placeholders(query)
+        async with self._conn.transaction():
+            for params in params_seq:
+                await self._conn.execute(pg_query, *params)
+
+    async def commit(self) -> None:
+        pass
+
+    @property
+    def lastrowid(self) -> int | None:
+        return self._last_id
+
+
+class _PgCursor:
+    def __init__(self, rows: list[dict], lastrowid: int | None) -> None:
+        self._rows = rows
+        self.lastrowid = lastrowid
+        self.description = [(k,) for k in (rows[0].keys() if rows else [])]
+
+    async def fetchall(self) -> list[dict]:
+        return self._rows
+
+    async def fetchone(self) -> dict | None:
+        return self._rows[0] if self._rows else None
 
 
 @asynccontextmanager
-async def get_db():
+async def _get_pg_db() -> AsyncIterator[_PgConnection]:
+    import asyncpg  # noqa: PLC0415
+
+    conn = await asyncpg.connect(DATABASE_URL)
+    try:
+        yield _PgConnection(conn)
+    finally:
+        await conn.close()
+
+
+# ---------------------------------------------------------------------------
+# SQLite connection wrapper
+# ---------------------------------------------------------------------------
+
+
+@asynccontextmanager
+async def _get_sqlite_db() -> AsyncIterator[aiosqlite.Connection]:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
@@ -19,8 +114,35 @@ async def get_db():
         yield db
 
 
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+
+@asynccontextmanager
+async def get_db():
+    """Async context manager returning a database connection.
+
+    Yields an aiosqlite.Connection for SQLite or a _PgConnection for PostgreSQL.
+    Both expose: execute(), executemany(), commit(), and cursor.fetchall/fetchone.
+    """
+    if IS_POSTGRES:
+        async with _get_pg_db() as db:
+            yield db
+    else:
+        async with _get_sqlite_db() as db:
+            yield db
+
+
 async def init_db() -> None:
-    """Create all tables if they don't exist."""
+    """Create all tables for SQLite local development.
+
+    For PostgreSQL the schema is managed by Alembic migrations — this function
+    is a no-op when DATABASE_URL points to PostgreSQL.
+    """
+    if IS_POSTGRES:
+        return
+
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("PRAGMA journal_mode=WAL")

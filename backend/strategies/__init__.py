@@ -1,4 +1,5 @@
 """Strategy registry: discovers and registers available strategies."""
+
 from __future__ import annotations
 
 from backend.strategies.base import Strategy
@@ -29,19 +30,21 @@ def list_strategies() -> list[dict]:
     result = []
     for name, cls in _REGISTRY.items():
         instance = cls()
-        result.append({
-            "name": name,
-            "description": instance.description,
-            "parameters": [
-                {
-                    "name": p.name,
-                    "type": p.type,
-                    "default": p.default,
-                    "min": p.min,
-                    "max": p.max,
-                    "description": p.description,
-                }
-                for p in instance.get_parameters()
-            ],
-        })
+        result.append(
+            {
+                "name": name,
+                "description": instance.description,
+                "parameters": [
+                    {
+                        "name": p.name,
+                        "type": p.type,
+                        "default": p.default,
+                        "min": p.min,
+                        "max": p.max,
+                        "description": p.description,
+                    }
+                    for p in instance.get_parameters()
+                ],
+            }
+        )
     return result

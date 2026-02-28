@@ -1,11 +1,20 @@
 """Tests for live_tracker: stop logic, entry fill, candle-close exits."""
+
 from __future__ import annotations
 
-import asyncio
 import json
 import os
+from datetime import UTC
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
-from unittest.mock import patch, AsyncMock, MagicMock
+
+from backend.database import get_db, init_db
+from backend.download_engine import INTERVAL_MS
+from backend.live_tracker import (
+    _check_intrabar_stops,
+    _fill_pending_entries,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -13,22 +22,15 @@ def _use_temp_db(tmp_path):
     db_path = str(tmp_path / "test_tracker.db")
     os.environ["DB_PATH"] = db_path
     import backend.database as dbmod
+
     dbmod.DB_PATH = __import__("pathlib").Path(db_path)
     yield
 
 
-from backend.database import init_db, get_db
-from backend.live_tracker import (
-    _fill_pending_entries,
-    _check_intrabar_stops,
-    DEFAULT_POLL_INTERVAL,
-)
-from backend.download_engine import INTERVAL_MS
-
-
 def _now_iso():
-    from datetime import datetime, timezone
-    return datetime.now(timezone.utc).isoformat()
+    from datetime import datetime
+
+    return datetime.now(UTC).isoformat()
 
 
 async def _setup_db():
@@ -36,13 +38,20 @@ async def _setup_db():
 
 
 async def _insert_config(**overrides) -> int:
-    defaults = dict(
-        symbol="BTCUSDT", interval="1h", strategy="breakout",
-        params=json.dumps({"N_entrada": 5, "M_salida": 3, "stop_pct": 0.02}, sort_keys=True),
-        stop_cross_pct=0.02, portfolio=10000.0, invested_amount=None,
-        leverage=1.0, cost_bps=10.0, polling_interval_s=None,
-        active=1, last_processed_candle=0,
-    )
+    defaults = {
+        "symbol": "BTCUSDT",
+        "interval": "1h",
+        "strategy": "breakout",
+        "params": json.dumps({"N_entrada": 5, "M_salida": 3, "stop_pct": 0.02}, sort_keys=True),
+        "stop_cross_pct": 0.02,
+        "portfolio": 10000.0,
+        "invested_amount": None,
+        "leverage": 1.0,
+        "cost_bps": 10.0,
+        "polling_interval_s": None,
+        "active": 1,
+        "last_processed_candle": 0,
+    }
     defaults.update(overrides)
     now = _now_iso()
     async with get_db() as db:
@@ -53,20 +62,34 @@ async def _insert_config(**overrides) -> int:
                  polling_interval_s, active, last_processed_candle,
                  created_at, updated_at)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (defaults["symbol"], defaults["interval"], defaults["strategy"],
-             defaults["params"], defaults["stop_cross_pct"],
-             defaults["portfolio"], defaults["invested_amount"],
-             defaults["leverage"], defaults["cost_bps"],
-             defaults["polling_interval_s"], defaults["active"],
-             defaults["last_processed_candle"], now, now),
+            (
+                defaults["symbol"],
+                defaults["interval"],
+                defaults["strategy"],
+                defaults["params"],
+                defaults["stop_cross_pct"],
+                defaults["portfolio"],
+                defaults["invested_amount"],
+                defaults["leverage"],
+                defaults["cost_bps"],
+                defaults["polling_interval_s"],
+                defaults["active"],
+                defaults["last_processed_candle"],
+                now,
+                now,
+            ),
         )
         await db.commit()
         return cursor.lastrowid
 
 
-async def _insert_signal(config_id: int, trigger_time: int = 1000000,
-                         side: str = "long", stop_price: float = 95.0,
-                         stop_trigger: float = 93.1) -> int:
+async def _insert_signal(
+    config_id: int,
+    trigger_time: int = 1000000,
+    side: str = "long",
+    stop_price: float = 95.0,
+    stop_trigger: float = 93.1,
+) -> int:
     now = _now_iso()
     async with get_db() as db:
         cursor = await db.execute(
@@ -81,18 +104,21 @@ async def _insert_signal(config_id: int, trigger_time: int = 1000000,
         return cursor.lastrowid
 
 
-async def _insert_sim_trade(signal_id: int, config_id: int,
-                            status: str = "open",
-                            side: str = "long",
-                            entry_price: float = 100.0,
-                            entry_time: int = 1000000,
-                            stop_base: float = 95.0,
-                            stop_trigger: float = 93.1,
-                            quantity: float = 100.0,
-                            portfolio: float = 10000.0,
-                            invested_amount: float = 10000.0,
-                            leverage: float = 1.0,
-                            fees: float = 10.0) -> int:
+async def _insert_sim_trade(
+    signal_id: int,
+    config_id: int,
+    status: str = "open",
+    side: str = "long",
+    entry_price: float = 100.0,
+    entry_time: int = 1000000,
+    stop_base: float = 95.0,
+    stop_trigger: float = 93.1,
+    quantity: float = 100.0,
+    portfolio: float = 10000.0,
+    invested_amount: float = 10000.0,
+    leverage: float = 1.0,
+    fees: float = 10.0,
+) -> int:
     now = _now_iso()
     async with get_db() as db:
         cursor = await db.execute(
@@ -102,10 +128,23 @@ async def _insert_sim_trade(signal_id: int, config_id: int,
                  status, portfolio, invested_amount, leverage,
                  quantity, fees, created_at, updated_at)
                VALUES (?, ?, 'BTCUSDT', '1h', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (signal_id, config_id, side,
-             entry_price, entry_time, stop_base, stop_trigger,
-             status, portfolio, invested_amount, leverage,
-             quantity, fees, now, now),
+            (
+                signal_id,
+                config_id,
+                side,
+                entry_price,
+                entry_time,
+                stop_base,
+                stop_trigger,
+                status,
+                portfolio,
+                invested_amount,
+                leverage,
+                quantity,
+                fees,
+                now,
+                now,
+            ),
         )
         await db.commit()
         return cursor.lastrowid
@@ -115,6 +154,7 @@ async def _insert_sim_trade(signal_id: int, config_id: int,
 # Tests: Intrabar stop
 # ---------------------------------------------------------------------------
 
+
 class TestIntrabarStop:
     @pytest.mark.asyncio
     async def test_long_stop_triggered_when_price_below_trigger(self):
@@ -123,9 +163,16 @@ class TestIntrabarStop:
         config_id = await _insert_config()
         signal_id = await _insert_signal(config_id, stop_price=95.0, stop_trigger=93.1)
         trade_id = await _insert_sim_trade(
-            signal_id, config_id, status="open", side="long",
-            entry_price=100.0, stop_base=95.0, stop_trigger=93.1,
-            quantity=100.0, portfolio=10000.0, invested_amount=10000.0,
+            signal_id,
+            config_id,
+            status="open",
+            side="long",
+            entry_price=100.0,
+            stop_base=95.0,
+            stop_trigger=93.1,
+            quantity=100.0,
+            portfolio=10000.0,
+            invested_amount=10000.0,
         )
 
         # Mock ticker to return price below stop_trigger (93.1)
@@ -155,8 +202,13 @@ class TestIntrabarStop:
         config_id = await _insert_config()
         signal_id = await _insert_signal(config_id, stop_price=95.0, stop_trigger=93.1)
         trade_id = await _insert_sim_trade(
-            signal_id, config_id, status="open", side="long",
-            entry_price=100.0, stop_base=95.0, stop_trigger=93.1,
+            signal_id,
+            config_id,
+            status="open",
+            side="long",
+            entry_price=100.0,
+            stop_base=95.0,
+            stop_trigger=93.1,
             quantity=100.0,
         )
 
@@ -169,7 +221,8 @@ class TestIntrabarStop:
 
         async with get_db() as db:
             cursor = await db.execute(
-                "SELECT status FROM sim_trades WHERE id = ?", (trade_id,),
+                "SELECT status FROM sim_trades WHERE id = ?",
+                (trade_id,),
             )
             row = await cursor.fetchone()
         assert row[0] == "open"
@@ -181,11 +234,19 @@ class TestIntrabarStop:
         config_id = await _insert_config()
         # Short: stop_base=105, trigger=105*(1+0.02)=107.1
         signal_id = await _insert_signal(
-            config_id, side="short", stop_price=105.0, stop_trigger=107.1,
+            config_id,
+            side="short",
+            stop_price=105.0,
+            stop_trigger=107.1,
         )
         trade_id = await _insert_sim_trade(
-            signal_id, config_id, status="open", side="short",
-            entry_price=100.0, stop_base=105.0, stop_trigger=107.1,
+            signal_id,
+            config_id,
+            status="open",
+            side="short",
+            entry_price=100.0,
+            stop_base=105.0,
+            stop_trigger=107.1,
             quantity=100.0,
         )
 
@@ -210,11 +271,19 @@ class TestIntrabarStop:
         await _setup_db()
         config_id = await _insert_config()
         signal_id = await _insert_signal(
-            config_id, side="short", stop_price=105.0, stop_trigger=107.1,
+            config_id,
+            side="short",
+            stop_price=105.0,
+            stop_trigger=107.1,
         )
         trade_id = await _insert_sim_trade(
-            signal_id, config_id, status="open", side="short",
-            entry_price=100.0, stop_base=105.0, stop_trigger=107.1,
+            signal_id,
+            config_id,
+            status="open",
+            side="short",
+            entry_price=100.0,
+            stop_base=105.0,
+            stop_trigger=107.1,
             quantity=100.0,
         )
 
@@ -227,7 +296,8 @@ class TestIntrabarStop:
 
         async with get_db() as db:
             cursor = await db.execute(
-                "SELECT status FROM sim_trades WHERE id = ?", (trade_id,),
+                "SELECT status FROM sim_trades WHERE id = ?",
+                (trade_id,),
             )
             row = await cursor.fetchone()
         assert row[0] == "open"
@@ -241,8 +311,13 @@ class TestNotificationDedup:
         config_id = await _insert_config()
         signal_id = await _insert_signal(config_id, stop_trigger=93.1)
         trade_id = await _insert_sim_trade(
-            signal_id, config_id, status="open", side="long",
-            entry_price=100.0, stop_trigger=93.1, quantity=100.0,
+            signal_id,
+            config_id,
+            status="open",
+            side="long",
+            entry_price=100.0,
+            stop_trigger=93.1,
+            quantity=100.0,
         )
 
         with patch("backend.live_tracker.binance_client") as mock_client:
@@ -271,8 +346,13 @@ class TestPnlCalculation:
         config_id = await _insert_config(cost_bps=0.0)  # no fees for simplicity
         signal_id = await _insert_signal(config_id, stop_trigger=93.1)
         trade_id = await _insert_sim_trade(
-            signal_id, config_id, status="open", side="long",
-            entry_price=100.0, stop_trigger=93.1, quantity=100.0,
+            signal_id,
+            config_id,
+            status="open",
+            side="long",
+            entry_price=100.0,
+            stop_trigger=93.1,
+            quantity=100.0,
             fees=0.0,
         )
 
@@ -299,12 +379,21 @@ class TestPnlCalculation:
         await _setup_db()
         config_id = await _insert_config(cost_bps=0.0)
         signal_id = await _insert_signal(
-            config_id, side="short", stop_price=105.0, stop_trigger=107.1,
+            config_id,
+            side="short",
+            stop_price=105.0,
+            stop_trigger=107.1,
         )
         trade_id = await _insert_sim_trade(
-            signal_id, config_id, status="open", side="short",
-            entry_price=100.0, stop_base=105.0, stop_trigger=107.1,
-            quantity=100.0, fees=0.0,
+            signal_id,
+            config_id,
+            status="open",
+            side="short",
+            entry_price=100.0,
+            stop_base=105.0,
+            stop_trigger=107.1,
+            quantity=100.0,
+            fees=0.0,
         )
 
         with patch("backend.live_tracker.binance_client") as mock_client:
@@ -316,7 +405,8 @@ class TestPnlCalculation:
 
         async with get_db() as db:
             cursor = await db.execute(
-                "SELECT pnl FROM sim_trades WHERE id = ?", (trade_id,),
+                "SELECT pnl FROM sim_trades WHERE id = ?",
+                (trade_id,),
             )
             row = await cursor.fetchone()
         # pnl = quantity * (entry - stop_trigger) = 100 * (100 - 107.1) = -710
@@ -335,9 +425,13 @@ class TestPendingEntryFill:
 
         signal_id = await _insert_signal(config_id, trigger_time=trigger_time)
         trade_id = await _insert_sim_trade(
-            signal_id, config_id, status="pending_entry",
-            entry_price=None, entry_time=None,
-            stop_base=95.0, stop_trigger=93.1,
+            signal_id,
+            config_id,
+            status="pending_entry",
+            entry_price=None,
+            entry_time=None,
+            stop_base=95.0,
+            stop_trigger=93.1,
             quantity=None,
         )
 

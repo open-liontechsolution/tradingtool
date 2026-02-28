@@ -1,10 +1,11 @@
 """Download engine: orchestrates Binance klines download with gap detection and upsert."""
+
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import aiosqlite
@@ -16,26 +17,26 @@ logger = logging.getLogger(__name__)
 
 # Interval duration in milliseconds
 INTERVAL_MS: dict[str, int] = {
-    "1m":  60_000,
-    "3m":  3 * 60_000,
-    "5m":  5 * 60_000,
+    "1m": 60_000,
+    "3m": 3 * 60_000,
+    "5m": 5 * 60_000,
     "15m": 15 * 60_000,
     "30m": 30 * 60_000,
-    "1h":  3_600_000,
-    "2h":  2 * 3_600_000,
-    "4h":  4 * 3_600_000,
-    "6h":  6 * 3_600_000,
-    "8h":  8 * 3_600_000,
+    "1h": 3_600_000,
+    "2h": 2 * 3_600_000,
+    "4h": 4 * 3_600_000,
+    "6h": 6 * 3_600_000,
+    "8h": 8 * 3_600_000,
     "12h": 12 * 3_600_000,
-    "1d":  86_400_000,
-    "3d":  3 * 86_400_000,
-    "1w":  7 * 86_400_000,
-    "1M":  30 * 86_400_000,  # approximation; Binance uses calendar months
+    "1d": 86_400_000,
+    "3d": 3 * 86_400_000,
+    "1w": 7 * 86_400_000,
+    "1M": 30 * 86_400_000,  # approximation; Binance uses calendar months
 }
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _expected_open_times(start_ms: int, end_ms: int, interval: str) -> list[int]:
@@ -138,9 +139,7 @@ async def _update_job(
     await db.commit()
 
 
-async def create_download_job(
-    symbol: str, interval: str, start_time: int, end_time: int
-) -> int:
+async def create_download_job(symbol: str, interval: str, start_time: int, end_time: int) -> int:
     """Create a new download job and return its ID."""
     async with get_db() as db:
         now = _now_iso()
@@ -190,9 +189,7 @@ _syncing: set[tuple[str, str]] = set()
 _verified_ranges: dict[tuple[str, str], int] = {}
 
 
-async def _sync_gaps_task(
-    symbol: str, interval: str, start_ms: int, end_ms: int
-) -> None:
+async def _sync_gaps_task(symbol: str, interval: str, start_ms: int, end_ms: int) -> None:
     """
     Background coroutine: detect and fill gaps in [start_ms, end_ms) for
     symbol/interval without creating a download_jobs row.
@@ -218,7 +215,9 @@ async def _sync_gaps_task(
 
         logger.info(
             "ensure_candles: syncing %d missing candles for %s %s",
-            len(gaps), symbol, interval,
+            len(gaps),
+            symbol,
+            interval,
         )
 
         i = 0
@@ -238,7 +237,10 @@ async def _sync_gaps_task(
             except Exception as exc:
                 logger.warning(
                     "ensure_candles: klines fetch failed for %s %s batch %d: %s",
-                    symbol, interval, i, exc,
+                    symbol,
+                    interval,
+                    i,
+                    exc,
                 )
                 return  # will retry on next scanner cycle
 
@@ -263,7 +265,9 @@ async def _sync_gaps_task(
         else:
             logger.warning(
                 "ensure_candles: %d gaps remain for %s %s after sync",
-                final_gaps, symbol, interval,
+                final_gaps,
+                symbol,
+                interval,
             )
 
     except Exception as exc:
@@ -272,9 +276,7 @@ async def _sync_gaps_task(
         _syncing.discard(key)
 
 
-async def ensure_candles(
-    symbol: str, interval: str, start_ms: int, end_ms: int
-) -> bool:
+async def ensure_candles(symbol: str, interval: str, start_ms: int, end_ms: int) -> bool:
     """
     Ensure [start_ms, end_ms) klines exist in DB for symbol/interval.
 
@@ -328,7 +330,10 @@ async def ensure_candles(
     asyncio.create_task(_sync_gaps_task(symbol, interval, start_ms, end_ms))
     logger.info(
         "ensure_candles: launched async sync for %s %s (%d/%d candles present)",
-        symbol, interval, actual_count, expected_count,
+        symbol,
+        interval,
+        actual_count,
+        expected_count,
     )
     return False
 
@@ -360,16 +365,16 @@ async def run_download_job(job_id: int) -> None:
             # Step 1: Compute expected timestamps
             expected = _expected_open_times(start_ms, end_ms, interval)
             candles_expected = len(expected)
-            await _update_job(db, job_id, candles_expected=candles_expected,
-                              log_entry=f"Expected {candles_expected} candles")
+            await _update_job(
+                db, job_id, candles_expected=candles_expected, log_entry=f"Expected {candles_expected} candles"
+            )
 
             # Step 2: Find existing candles
             existing = await _get_existing_open_times(db, symbol, interval, start_ms, end_ms)
 
             # Step 3: Find gaps
             gaps = sorted(set(expected) - existing)
-            await _update_job(db, job_id, gaps_found=len(gaps),
-                              log_entry=f"Found {len(gaps)} missing candles")
+            await _update_job(db, job_id, gaps_found=len(gaps), log_entry=f"Found {len(gaps)} missing candles")
 
             total_downloaded = len(existing)
             downloaded_at = _now_iso()
@@ -412,17 +417,19 @@ async def run_download_job(job_id: int) -> None:
 
                 progress = total_downloaded / max(candles_expected, 1) * 100
                 await _update_job(
-                    db, job_id,
+                    db,
+                    job_id,
                     candles_downloaded=total_downloaded,
                     progress_pct=min(progress, 100.0),
-                    log_entry=f"Batch done: {total_downloaded}/{candles_expected} candles"
+                    log_entry=f"Batch done: {total_downloaded}/{candles_expected} candles",
                 )
 
             # Step 5: Re-scan for remaining gaps
             final_existing = await _get_existing_open_times(db, symbol, interval, start_ms, end_ms)
             final_gaps = set(expected) - final_existing
             await _update_job(
-                db, job_id,
+                db,
+                job_id,
                 status="completed",
                 progress_pct=100.0,
                 candles_downloaded=len(final_existing),

@@ -1,12 +1,21 @@
 """Tests for ensure_candles() in download_engine and its integration with scan_config."""
+
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import time
+from unittest.mock import AsyncMock, patch
+
 import pytest
-from unittest.mock import patch, AsyncMock, MagicMock
+
+from backend.database import get_db, init_db
+from backend.download_engine import (
+    INTERVAL_MS,
+    _syncing,
+    _verified_ranges,
+    ensure_candles,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -14,9 +23,11 @@ def _use_temp_db(tmp_path):
     db_path = str(tmp_path / "test_ensure.db")
     os.environ["DB_PATH"] = db_path
     import backend.database as dbmod
+
     dbmod.DB_PATH = __import__("pathlib").Path(db_path)
     # Reset module-level caches between tests
     import backend.download_engine as de
+
     de._syncing.clear()
     de._verified_ranges.clear()
     yield
@@ -24,27 +35,17 @@ def _use_temp_db(tmp_path):
     de._verified_ranges.clear()
 
 
-from backend.database import init_db, get_db
-from backend.download_engine import (
-    ensure_candles,
-    _syncing,
-    _verified_ranges,
-    _expected_open_times,
-    INTERVAL_MS,
-)
-
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 async def _insert_candles(symbol: str, interval: str, open_times: list[int]) -> None:
     """Insert minimal kline rows for the given open_times."""
     step_ms = INTERVAL_MS[interval]
     now_iso = "2025-01-01T00:00:00Z"
     rows = [
-        (symbol, interval, ot, "100", "101", "99", "100.5", "10",
-         ot + step_ms - 1, "1000", 10, "5", "500", now_iso)
+        (symbol, interval, ot, "100", "101", "99", "100.5", "10", ot + step_ms - 1, "1000", 10, "5", "500", now_iso)
         for ot in open_times
     ]
     async with get_db() as db:
@@ -62,6 +63,7 @@ async def _insert_candles(symbol: str, interval: str, open_times: list[int]) -> 
 # ---------------------------------------------------------------------------
 # Tests: ensure_candles returns True when data is complete
 # ---------------------------------------------------------------------------
+
 
 class TestEnsureCandlesDataPresent:
     @pytest.mark.asyncio
@@ -145,6 +147,7 @@ class TestEnsureCandlesDataPresent:
 # Tests: deduplication — no duplicate sync tasks
 # ---------------------------------------------------------------------------
 
+
 class TestEnsureCandlesDedup:
     @pytest.mark.asyncio
     async def test_no_duplicate_task_if_already_syncing(self):
@@ -167,6 +170,7 @@ class TestEnsureCandlesDedup:
 # Tests: scan_config skips when ensure_candles returns False
 # ---------------------------------------------------------------------------
 
+
 class TestScanConfigEnsureCandlesIntegration:
     @pytest.mark.asyncio
     async def test_scan_config_skips_when_data_not_ready(self, tmp_path):
@@ -187,9 +191,12 @@ class TestScanConfigEnsureCandlesIntegration:
             "last_processed_candle": 0,
         }
 
-        with patch("backend.signal_engine.ensure_candles", new=AsyncMock(return_value=False)), \
-             patch("backend.signal_engine.load_candles_df") as mock_load:
+        with (
+            patch("backend.signal_engine.ensure_candles", new=AsyncMock(return_value=False)),
+            patch("backend.signal_engine.load_candles_df") as mock_load,
+        ):
             from backend.signal_engine import scan_config
+
             await scan_config(config)
             mock_load.assert_not_called()
 
@@ -199,6 +206,7 @@ class TestScanConfigEnsureCandlesIntegration:
         await init_db()
 
         import pandas as pd
+
         step_ms = INTERVAL_MS["1h"]
         now_ms = int(time.time() * 1000)
         last_closed = ((now_ms // step_ms) * step_ms) - step_ms
@@ -207,10 +215,16 @@ class TestScanConfigEnsureCandlesIntegration:
         rows = []
         for i in range(10):
             ot = last_closed - (9 - i) * step_ms
-            rows.append({
-                "open_time": ot, "open": 100.0, "high": 101.0,
-                "low": 99.0, "close": 100.5, "volume": 10.0,
-            })
+            rows.append(
+                {
+                    "open_time": ot,
+                    "open": 100.0,
+                    "high": 101.0,
+                    "low": 99.0,
+                    "close": 100.5,
+                    "volume": 10.0,
+                }
+            )
         df = pd.DataFrame(rows)
 
         config = {
@@ -227,8 +241,11 @@ class TestScanConfigEnsureCandlesIntegration:
             "last_processed_candle": 0,
         }
 
-        with patch("backend.signal_engine.ensure_candles", new=AsyncMock(return_value=True)), \
-             patch("backend.signal_engine.load_candles_df", new=AsyncMock(return_value=df)):
+        with (
+            patch("backend.signal_engine.ensure_candles", new=AsyncMock(return_value=True)),
+            patch("backend.signal_engine.load_candles_df", new=AsyncMock(return_value=df)),
+        ):
             from backend.signal_engine import scan_config
+
             # Should not raise; will try to init strategy with tiny df but won't crash
             await scan_config(config)

@@ -1,4 +1,5 @@
 """Derived metrics engine: computes technical indicators and saves to derived_metrics table."""
+
 from __future__ import annotations
 
 import logging
@@ -6,7 +7,6 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-import aiosqlite
 
 from backend.database import get_db
 
@@ -44,7 +44,7 @@ async def load_candles_df(
 
 
 async def _upsert_metrics(
-    db: aiosqlite.Connection,
+    db: Any,
     symbol: str,
     interval: str,
     records: list[tuple[int, str, float | None]],
@@ -62,13 +62,8 @@ async def _upsert_metrics(
     await db.commit()
 
 
-def _series_to_records(
-    open_times: pd.Series, name: str, values: pd.Series
-) -> list[tuple[int, str, float | None]]:
-    return [
-        (int(ot), name, None if pd.isna(v) else float(v))
-        for ot, v in zip(open_times, values)
-    ]
+def _series_to_records(open_times: pd.Series, name: str, values: pd.Series) -> list[tuple[int, str, float | None]]:
+    return [(int(ot), name, None if pd.isna(v) else float(v)) for ot, v in zip(open_times, values, strict=False)]
 
 
 def compute_metrics(df: pd.DataFrame, selected: list[str] | None = None) -> dict[str, pd.Series]:
@@ -82,12 +77,15 @@ def compute_metrics(df: pd.DataFrame, selected: list[str] | None = None) -> dict
     close = df["close"]
     high = df["high"]
     low = df["low"]
-    open_ = df["open"]
 
     results: dict[str, pd.Series] = {}
 
     def want(name: str) -> bool:
-        return selected is None or name in selected or any(name.startswith(s.split("_")[0] + "_") for s in (selected or []))
+        return (
+            selected is None
+            or name in selected
+            or any(name.startswith(s.split("_")[0] + "_") for s in (selected or []))
+        )
 
     # Returns
     log_ret = np.log(close / close.shift(1))

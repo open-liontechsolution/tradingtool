@@ -1,8 +1,9 @@
 """REST API routes for signals, SimTrades, RealTrades, and comparison."""
+
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
@@ -14,12 +15,13 @@ router = APIRouter(tags=["signals"])
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 # ---------------------------------------------------------------------------
 # Pydantic models
 # ---------------------------------------------------------------------------
+
 
 class SignalConfigCreate(BaseModel):
     symbol: str
@@ -69,15 +71,17 @@ class RealTradePatch(BaseModel):
 # Signal Configs
 # ---------------------------------------------------------------------------
 
+
 @router.post("/signals/configs")
 async def create_signal_config(req: SignalConfigCreate) -> dict:
     """Create a new signal config."""
     from backend.strategies import get_strategy
+
     # Validate strategy exists
     try:
         get_strategy(req.strategy)
     except KeyError as exc:
-        raise HTTPException(400, str(exc))
+        raise HTTPException(400, str(exc)) from exc
 
     if req.invested_amount is None and req.leverage is None:
         req.leverage = 1.0
@@ -95,10 +99,18 @@ async def create_signal_config(req: SignalConfigCreate) -> dict:
                      created_at, updated_at)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?)""",
                 (
-                    req.symbol.upper(), req.interval, req.strategy,
-                    params_json, req.stop_cross_pct,
-                    req.portfolio, req.invested_amount, req.leverage,
-                    req.cost_bps, req.polling_interval_s, now, now,
+                    req.symbol.upper(),
+                    req.interval,
+                    req.strategy,
+                    params_json,
+                    req.stop_cross_pct,
+                    req.portfolio,
+                    req.invested_amount,
+                    req.leverage,
+                    req.cost_bps,
+                    req.polling_interval_s,
+                    now,
+                    now,
                 ),
             )
             await db.commit()
@@ -108,7 +120,7 @@ async def create_signal_config(req: SignalConfigCreate) -> dict:
                 raise HTTPException(
                     409,
                     "A config with the same symbol/interval/strategy/params already exists",
-                )
+                ) from exc
             raise
 
     return {"id": config_id, "status": "created"}
@@ -129,7 +141,7 @@ async def list_signal_configs(
         cols = [d[0] for d in cursor.description]
     configs = []
     for row in rows:
-        c = dict(zip(cols, row))
+        c = dict(zip(cols, row, strict=False))
         c["params"] = json.loads(c["params"]) if isinstance(c["params"], str) else c["params"]
         c["active"] = bool(c["active"])
         configs.append(c)
@@ -201,7 +213,8 @@ async def delete_signal_config(config_id: int) -> dict:
             (config_id,),
         )
         cursor = await db.execute(
-            "DELETE FROM signal_configs WHERE id = ?", (config_id,),
+            "DELETE FROM signal_configs WHERE id = ?",
+            (config_id,),
         )
         await db.commit()
         if cursor.rowcount == 0:
@@ -212,6 +225,7 @@ async def delete_signal_config(config_id: int) -> dict:
 # ---------------------------------------------------------------------------
 # Signals
 # ---------------------------------------------------------------------------
+
 
 @router.get("/signals")
 async def list_signals(
@@ -245,31 +259,23 @@ async def list_signals(
         cursor = await db.execute(query, params)
         rows = await cursor.fetchall()
         cols = [d[0] for d in cursor.description]
-    return {"signals": [dict(zip(cols, row)) for row in rows]}
+    return {"signals": [dict(zip(cols, row, strict=False)) for row in rows]}
 
 
 @router.get("/signals/status")
 async def signals_status() -> dict:
     """Status overview: open trades, active configs, recent signals."""
     async with get_db() as db:
-        cursor = await db.execute(
-            "SELECT COUNT(*) FROM signal_configs WHERE active = 1"
-        )
+        cursor = await db.execute("SELECT COUNT(*) FROM signal_configs WHERE active = 1")
         active_configs = (await cursor.fetchone())[0]
 
-        cursor = await db.execute(
-            "SELECT COUNT(*) FROM sim_trades WHERE status = 'open'"
-        )
+        cursor = await db.execute("SELECT COUNT(*) FROM sim_trades WHERE status = 'open'")
         open_trades = (await cursor.fetchone())[0]
 
-        cursor = await db.execute(
-            "SELECT COUNT(*) FROM sim_trades WHERE status = 'pending_entry'"
-        )
+        cursor = await db.execute("SELECT COUNT(*) FROM sim_trades WHERE status = 'pending_entry'")
         pending_trades = (await cursor.fetchone())[0]
 
-        cursor = await db.execute(
-            "SELECT COUNT(*) FROM signals WHERE created_at > datetime('now', '-24 hours')"
-        )
+        cursor = await db.execute("SELECT COUNT(*) FROM signals WHERE created_at > datetime('now', '-24 hours')")
         recent_signals = (await cursor.fetchone())[0]
 
     return {
@@ -289,12 +295,13 @@ async def get_signal(signal_id: int) -> dict:
         if row is None:
             raise HTTPException(404, f"Signal {signal_id} not found")
         cols = [d[0] for d in cursor.description]
-    return dict(zip(cols, row))
+    return dict(zip(cols, row, strict=False))
 
 
 # ---------------------------------------------------------------------------
 # SimTrades
 # ---------------------------------------------------------------------------
+
 
 @router.get("/sim-trades")
 async def list_sim_trades(
@@ -322,7 +329,7 @@ async def list_sim_trades(
         cursor = await db.execute(query, params)
         rows = await cursor.fetchall()
         cols = [d[0] for d in cursor.description]
-    return {"sim_trades": [dict(zip(cols, row)) for row in rows]}
+    return {"sim_trades": [dict(zip(cols, row, strict=False)) for row in rows]}
 
 
 @router.get("/sim-trades/{trade_id}")
@@ -334,7 +341,7 @@ async def get_sim_trade(trade_id: int) -> dict:
         if row is None:
             raise HTTPException(404, f"SimTrade {trade_id} not found")
         cols = [d[0] for d in cursor.description]
-    return dict(zip(cols, row))
+    return dict(zip(cols, row, strict=False))
 
 
 @router.post("/sim-trades/{trade_id}/close")
@@ -349,13 +356,14 @@ async def close_sim_trade(trade_id: int) -> dict:
         if row is None:
             raise HTTPException(404, "SimTrade not found or not open")
         cols = [d[0] for d in cursor.description]
-    trade = dict(zip(cols, row))
+    trade = dict(zip(cols, row, strict=False))
 
     from backend.binance_client import binance_client
+
     try:
         current_price = await binance_client.get_ticker_price(trade["symbol"])
     except Exception as exc:
-        raise HTTPException(503, f"Could not fetch price: {exc}")
+        raise HTTPException(503, f"Could not fetch price: {exc}") from exc
 
     entry_price = float(trade["entry_price"])
     quantity = float(trade["quantity"])
@@ -378,7 +386,7 @@ async def close_sim_trade(trade_id: int) -> dict:
     portfolio = float(trade["portfolio"])
     pnl_pct = net_pnl / portfolio if portfolio > 0 else 0.0
     now = _now_iso()
-    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    now_ms = int(datetime.now(UTC).timestamp() * 1000)
 
     async with get_db() as db:
         await db.execute(
@@ -408,6 +416,7 @@ async def close_sim_trade(trade_id: int) -> dict:
 # Real Trades
 # ---------------------------------------------------------------------------
 
+
 @router.post("/real-trades")
 async def create_real_trade(req: RealTradeCreate) -> dict:
     """Register a real trade, optionally linked to a SimTrade/Signal."""
@@ -419,9 +428,17 @@ async def create_real_trade(req: RealTradeCreate) -> dict:
                  quantity, fees, notes, status, created_at, updated_at)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)""",
             (
-                req.sim_trade_id, req.signal_id,
-                req.symbol.upper(), req.side, req.entry_price, req.entry_time,
-                req.quantity, req.fees, req.notes, now, now,
+                req.sim_trade_id,
+                req.signal_id,
+                req.symbol.upper(),
+                req.side,
+                req.entry_price,
+                req.entry_time,
+                req.quantity,
+                req.fees,
+                req.notes,
+                now,
+                now,
             ),
         )
         await db.commit()
@@ -450,7 +467,7 @@ async def list_real_trades(
         cursor = await db.execute(query, params)
         rows = await cursor.fetchall()
         cols = [d[0] for d in cursor.description]
-    return {"real_trades": [dict(zip(cols, row)) for row in rows]}
+    return {"real_trades": [dict(zip(cols, row, strict=False)) for row in rows]}
 
 
 @router.patch("/real-trades/{trade_id}")
@@ -516,7 +533,8 @@ async def delete_real_trade(trade_id: int) -> dict:
     """Delete a real trade."""
     async with get_db() as db:
         cursor = await db.execute(
-            "DELETE FROM real_trades WHERE id = ?", (trade_id,),
+            "DELETE FROM real_trades WHERE id = ?",
+            (trade_id,),
         )
         await db.commit()
         if cursor.rowcount == 0:
@@ -528,25 +546,28 @@ async def delete_real_trade(trade_id: int) -> dict:
 # Comparison
 # ---------------------------------------------------------------------------
 
+
 @router.get("/comparison/{sim_trade_id}")
 async def compare_trades(sim_trade_id: int) -> dict:
     """Compare a SimTrade with its linked RealTrade(s)."""
     async with get_db() as db:
         cursor = await db.execute(
-            "SELECT * FROM sim_trades WHERE id = ?", (sim_trade_id,),
+            "SELECT * FROM sim_trades WHERE id = ?",
+            (sim_trade_id,),
         )
         sim_row = await cursor.fetchone()
         if sim_row is None:
             raise HTTPException(404, f"SimTrade {sim_trade_id} not found")
         sim_cols = [d[0] for d in cursor.description]
-        sim = dict(zip(sim_cols, sim_row))
+        sim = dict(zip(sim_cols, sim_row, strict=False))
 
         cursor2 = await db.execute(
-            "SELECT * FROM real_trades WHERE sim_trade_id = ?", (sim_trade_id,),
+            "SELECT * FROM real_trades WHERE sim_trade_id = ?",
+            (sim_trade_id,),
         )
         real_rows = await cursor2.fetchall()
         real_cols = [d[0] for d in cursor2.description]
-    reals = [dict(zip(real_cols, row)) for row in real_rows]
+    reals = [dict(zip(real_cols, row, strict=False)) for row in real_rows]
 
     comparisons = []
     for real in reals:
@@ -558,16 +579,16 @@ async def compare_trades(sim_trade_id: int) -> dict:
         if real.get("pnl") is not None and sim.get("pnl") is not None:
             pnl_diff = float(real["pnl"]) - float(sim["pnl"])
 
-        comparisons.append({
-            "real_trade": real,
-            "entry_slippage": round(entry_slippage, 6) if entry_slippage is not None else None,
-            "exit_slippage": round(exit_slippage, 6) if exit_slippage is not None else None,
-            "pnl_diff": round(pnl_diff, 4) if pnl_diff is not None else None,
-        })
+        comparisons.append(
+            {
+                "real_trade": real,
+                "entry_slippage": round(entry_slippage, 6) if entry_slippage is not None else None,
+                "exit_slippage": round(exit_slippage, 6) if exit_slippage is not None else None,
+                "pnl_diff": round(pnl_diff, 4) if pnl_diff is not None else None,
+            }
+        )
 
     return {
         "sim_trade": sim,
         "comparisons": comparisons,
     }
-
-

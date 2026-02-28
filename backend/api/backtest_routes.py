@@ -1,18 +1,18 @@
 """REST API routes for backtesting."""
+
 from __future__ import annotations
 
 import csv
 import io
 import json
 import uuid
-from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from backend.strategies import list_strategies
 from backend.backtest_engine import run_backtest
+from backend.strategies import list_strategies
 
 router = APIRouter(tags=["backtest"])
 
@@ -23,8 +23,8 @@ _results: dict[str, dict] = {}
 class BacktestRequest(BaseModel):
     symbol: str
     interval: str
-    start_time: int   # ms timestamp
-    end_time: int     # ms timestamp
+    start_time: int  # ms timestamp
+    end_time: int  # ms timestamp
     strategy: str
     params: dict = {}
     initial_capital: float = 10_000.0

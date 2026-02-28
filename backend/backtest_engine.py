@@ -1,17 +1,17 @@
 """Backtest engine: iterates candles chronologically applying strategy signals."""
+
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any
 
 import pandas as pd
 
-from backend.metrics_engine import load_candles_df
-from backend.strategies.base import PositionState, Signal
-from backend.strategies import get_strategy
 from backend.backtest_metrics import compute_backtest_metrics
 from backend.download_engine import INTERVAL_MS
+from backend.metrics_engine import load_candles_df
+from backend.strategies import get_strategy
+from backend.strategies.base import PositionState, Signal
 
 logger = logging.getLogger(__name__)
 
@@ -107,22 +107,22 @@ async def run_backtest(
 
         exit_executed = False
         for sig in signals:
-            if sig.action in ("stop_long", "stop_short", "exit_long", "exit_short"):
-                if state.side != "flat":
-                    # For stops: use stop_price, but if open is already past stop, use open
-                    if sig.action == "stop_long":
-                        exec_price = min(sig.price, open_price) if open_price < state.stop_price else sig.price
-                    elif sig.action == "stop_short":
-                        exec_price = max(sig.price, open_price) if open_price > state.stop_price else sig.price
-                    else:
-                        exec_price = close_price if execution_mode == "close_current" else open_price
+            if sig.action in ("stop_long", "stop_short", "exit_long", "exit_short") and state.side != "flat":
+                # For stops: use stop_price, but if open is already past stop, use open
+                if sig.action == "stop_long":
+                    exec_price = min(sig.price, open_price) if open_price < state.stop_price else sig.price
+                elif sig.action == "stop_short":
+                    exec_price = max(sig.price, open_price) if open_price > state.stop_price else sig.price
+                else:
+                    exec_price = close_price if execution_mode == "close_current" else open_price
 
-                    pnl = _compute_pnl(state, exec_price, cost_factor, equity)
-                    equity_after = equity + pnl
-                    equity += pnl
-                    dur = t - _find_entry_candle_idx(df, state.entry_time)
-                    pnl_pct = (pnl / entry_equity * 100) if entry_equity > 0 else 0.0
-                    trade_log.append({
+                pnl = _compute_pnl(state, exec_price, cost_factor, equity)
+                equity_after = equity + pnl
+                equity += pnl
+                dur = t - _find_entry_candle_idx(df, state.entry_time)
+                pnl_pct = (pnl / entry_equity * 100) if entry_equity > 0 else 0.0
+                trade_log.append(
+                    {
                         "entry_time": state.entry_time,
                         "exit_time": int(candle["open_time"]),
                         "side": state.side,
@@ -137,10 +137,11 @@ async def run_backtest(
                         "equity_before": round(entry_equity, 4),
                         "equity_after": round(equity_after, 4),
                         "position_size": round(entry_equity, 4),
-                    })
-                    state = PositionState()
-                    exit_executed = True
-                    break
+                    }
+                )
+                state = PositionState()
+                exit_executed = True
+                break
 
             # Bankruptcy check
             if equity <= 0:
@@ -148,9 +149,7 @@ async def run_backtest(
                 result.equity_curve = equity_curve
                 result.trade_log = trade_log
                 interval_ms = INTERVAL_MS.get(interval, 86_400_000)
-                result.summary = compute_backtest_metrics(
-                    equity_curve, trade_log, initial_capital, interval_ms
-                )
+                result.summary = compute_backtest_metrics(equity_curve, trade_log, initial_capital, interval_ms)
                 return result
 
         # Handle entry signals (only if no exit happened and flat)

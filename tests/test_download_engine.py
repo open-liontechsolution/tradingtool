@@ -1,20 +1,21 @@
 """Tests for download_engine: gap detection, dedup, upsert logic."""
+
 from __future__ import annotations
 
 import os
+
+import aiosqlite
 import pytest
 import pytest_asyncio
-import aiosqlite
 
 os.environ["DB_PATH"] = ":memory:"
 
 from backend.download_engine import (
+    INTERVAL_MS,
     _expected_open_times,
     _get_existing_open_times,
     _upsert_candles,
-    INTERVAL_MS,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -78,6 +79,7 @@ async def db():
 # _expected_open_times
 # ---------------------------------------------------------------------------
 
+
 class TestExpectedOpenTimes:
     def test_1h_simple_range(self):
         step = INTERVAL_MS["1h"]
@@ -115,6 +117,7 @@ class TestExpectedOpenTimes:
 # _get_existing_open_times
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_get_existing_empty(db):
     result = await _get_existing_open_times(db, "BTCUSDT", "1h", 0, 10**13)
@@ -144,6 +147,7 @@ async def test_get_existing_filters_by_range(db):
 # ---------------------------------------------------------------------------
 # _upsert_candles — deduplication
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_upsert_no_duplicates(db):
@@ -199,6 +203,7 @@ async def test_upsert_empty_list(db):
 # ---------------------------------------------------------------------------
 # Gap detection logic
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_gap_detection(db):

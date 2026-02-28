@@ -1,14 +1,15 @@
 """Live tracker: monitors open SimTrades for intrabar stop and candle-close exits."""
+
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import time
-from datetime import datetime, timezone
-from typing import Any
+from datetime import UTC, datetime
 
-from backend.binance_client import binance_client, WEIGHT_LIMIT_PER_MINUTE
+from backend.binance_client import binance_client
 from backend.database import get_db
 from backend.download_engine import INTERVAL_MS, ensure_candles
 from backend.metrics_engine import load_candles_df
@@ -34,7 +35,7 @@ DEFAULT_POLL_FALLBACK = 120
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _now_ms() -> int:
@@ -53,10 +54,7 @@ def _current_candle_open(interval: str) -> int:
 def _get_poll_interval(config: dict) -> int:
     """Determine polling interval for a config, with rate-limit backoff."""
     override = config.get("polling_interval_s")
-    if override:
-        base = int(override)
-    else:
-        base = DEFAULT_POLL_INTERVAL.get(config["interval"], DEFAULT_POLL_FALLBACK)
+    base = int(override) if override else DEFAULT_POLL_INTERVAL.get(config["interval"], DEFAULT_POLL_FALLBACK)
 
     # Soft priority: if weight > 80%, double the interval
     ratio = binance_client.rate_limit.used_weight / max(binance_client.rate_limit.weight_limit, 1)
@@ -68,6 +66,7 @@ def _get_poll_interval(config: dict) -> int:
 # ---------------------------------------------------------------------------
 # Pending entry fill
 # ---------------------------------------------------------------------------
+
 
 async def _fill_pending_entries() -> None:
     """Fill entry_price for SimTrades in pending_entry state.
@@ -87,7 +86,7 @@ async def _fill_pending_entries() -> None:
         )
         rows = await cursor.fetchall()
         cols = [d[0] for d in cursor.description]
-    pending = [dict(zip(cols, row)) for row in rows]
+    pending = [dict(zip(cols, row, strict=False)) for row in rows]
 
     if not pending:
         return
@@ -104,8 +103,10 @@ async def _fill_pending_entries() -> None:
         # Trigger async sync for the entry candle range if missing
         # (only the 2-candle window around the trigger; full history is handled by scanner)
         await ensure_candles(
-            trade["symbol"], interval,
-            trigger_time, next_candle_open + step_ms,
+            trade["symbol"],
+            interval,
+            trigger_time,
+            next_candle_open + step_ms,
         )
 
         # Check if next candle exists in DB (means it has opened and we have data)
@@ -145,8 +146,7 @@ async def _fill_pending_entries() -> None:
                    SET entry_price = ?, entry_time = ?, quantity = ?, fees = ?,
                        equity_peak = ?, status = 'open', updated_at = ?
                    WHERE id = ?""",
-                (entry_price, next_candle_open, quantity, fee,
-                 float(trade["portfolio"]), now, trade["id"]),
+                (entry_price, next_candle_open, quantity, fee, float(trade["portfolio"]), now, trade["id"]),
             )
             await db.execute(
                 "UPDATE signals SET status = 'active' WHERE id = ?",
@@ -156,13 +156,18 @@ async def _fill_pending_entries() -> None:
 
         logger.info(
             "SimTrade %d filled: %s %s entry=%.6f qty=%.6f",
-            trade["id"], trade["side"], trade["symbol"], entry_price, quantity,
+            trade["id"],
+            trade["side"],
+            trade["symbol"],
+            entry_price,
+            quantity,
         )
 
 
 # ---------------------------------------------------------------------------
 # Intrabar stop check
 # ---------------------------------------------------------------------------
+
 
 async def _check_intrabar_stops() -> None:
     """Poll current price and check stop conditions for open SimTrades."""
@@ -175,7 +180,7 @@ async def _check_intrabar_stops() -> None:
         )
         rows = await cursor.fetchall()
         cols = [d[0] for d in cursor.description]
-    open_trades = [dict(zip(cols, row)) for row in rows]
+    open_trades = [dict(zip(cols, row, strict=False)) for row in rows]
 
     if not open_trades:
         return
@@ -198,9 +203,12 @@ async def _check_intrabar_stops() -> None:
             continue
 
         triggered = False
-        if trade["side"] == "long" and price <= trade["stop_trigger"]:
-            triggered = True
-        elif trade["side"] == "short" and price >= trade["stop_trigger"]:
+        if (
+            trade["side"] == "long"
+            and price <= trade["stop_trigger"]
+            or trade["side"] == "short"
+            and price >= trade["stop_trigger"]
+        ):
             triggered = True
 
         if not triggered:
@@ -245,22 +253,22 @@ async def _check_intrabar_stops() -> None:
                 (trade["signal_id"],),
             )
             # Log notification (dedup via unique index)
-            try:
+            with contextlib.suppress(Exception):
                 await db.execute(
                     """INSERT INTO notification_log
                         (event_type, reference_type, reference_id, message, sent_at)
                        VALUES ('stop_hit', 'sim_trade', ?, ?, ?)""",
-                    (trade["id"],
-                     f"Stop hit on {trade['symbol']} {trade['side']} at {exec_price:.6f}",
-                     now),
+                    (trade["id"], f"Stop hit on {trade['symbol']} {trade['side']} at {exec_price:.6f}", now),
                 )
-            except Exception:
-                pass  # duplicate notification
             await db.commit()
 
         logger.info(
             "SimTrade %d STOPPED: %s %s exec=%.6f pnl=%.4f",
-            trade["id"], trade["side"], trade["symbol"], exec_price, net_pnl,
+            trade["id"],
+            trade["side"],
+            trade["symbol"],
+            exec_price,
+            net_pnl,
         )
 
         # Check liquidation
@@ -271,6 +279,7 @@ async def _check_intrabar_stops() -> None:
 # ---------------------------------------------------------------------------
 # Candle-close exit check
 # ---------------------------------------------------------------------------
+
 
 async def _check_candle_close_exits() -> None:
     """On new closed candle, evaluate exit signals using the strategy."""
@@ -287,7 +296,7 @@ async def _check_candle_close_exits() -> None:
         )
         rows = await cursor.fetchall()
         cols = [d[0] for d in cursor.description]
-    open_trades = [dict(zip(cols, row)) for row in rows]
+    open_trades = [dict(zip(cols, row, strict=False)) for row in rows]
 
     if not open_trades:
         return
@@ -299,7 +308,6 @@ async def _check_candle_close_exits() -> None:
         groups.setdefault(key, []).append(trade)
 
     now = _now_iso()
-    now_ms_val = _now_ms()
 
     for (symbol, interval, strategy_name, params_str), trades in groups.items():
         step_ms = INTERVAL_MS.get(interval)
@@ -321,7 +329,8 @@ async def _check_candle_close_exits() -> None:
         if not ready:
             logger.info(
                 "live_tracker: data sync in progress for %s %s, skipping exit check",
-                symbol, interval,
+                symbol,
+                interval,
             )
             continue
 
@@ -380,29 +389,32 @@ async def _check_candle_close_exits() -> None:
                                    status = 'closed', pnl = ?, pnl_pct = ?,
                                    fees = ?, updated_at = ?
                                WHERE id = ?""",
-                            (exec_price, int(candle["open_time"]),
-                             net_pnl, pnl_pct, total_fees, now, trade["id"]),
+                            (exec_price, int(candle["open_time"]), net_pnl, pnl_pct, total_fees, now, trade["id"]),
                         )
                         await db.execute(
                             "UPDATE signals SET status = 'closed' WHERE id = ?",
                             (trade["signal_id"],),
                         )
-                        try:
+                        with contextlib.suppress(Exception):
                             await db.execute(
                                 """INSERT INTO notification_log
                                     (event_type, reference_type, reference_id, message, sent_at)
                                    VALUES ('exit_signal', 'sim_trade', ?, ?, ?)""",
-                                (trade["id"],
-                                 f"Exit signal on {trade['symbol']} {trade['side']} at {exec_price:.6f}",
-                                 now),
+                                (
+                                    trade["id"],
+                                    f"Exit signal on {trade['symbol']} {trade['side']} at {exec_price:.6f}",
+                                    now,
+                                ),
                             )
-                        except Exception:
-                            pass
                         await db.commit()
 
                     logger.info(
                         "SimTrade %d EXIT: %s %s exec=%.6f pnl=%.4f",
-                        trade["id"], trade["side"], trade["symbol"], exec_price, net_pnl,
+                        trade["id"],
+                        trade["side"],
+                        trade["symbol"],
+                        exec_price,
+                        net_pnl,
                     )
                     break
 
@@ -414,9 +426,12 @@ async def _check_candle_close_exits() -> None:
                     open_price = float(candle["open"])
 
                     # Gap open past stop: execute at open
-                    if trade["side"] == "long" and open_price < exec_price:
-                        exec_price = open_price
-                    elif trade["side"] == "short" and open_price > exec_price:
+                    if (
+                        trade["side"] == "long"
+                        and open_price < exec_price
+                        or trade["side"] == "short"
+                        and open_price > exec_price
+                    ):
                         exec_price = open_price
 
                     entry_price = float(trade["entry_price"])
@@ -441,29 +456,32 @@ async def _check_candle_close_exits() -> None:
                                    status = 'closed', pnl = ?, pnl_pct = ?,
                                    fees = ?, updated_at = ?
                                WHERE id = ?""",
-                            (exec_price, int(candle["open_time"]),
-                             net_pnl, pnl_pct, total_fees, now, trade["id"]),
+                            (exec_price, int(candle["open_time"]), net_pnl, pnl_pct, total_fees, now, trade["id"]),
                         )
                         await db.execute(
                             "UPDATE signals SET status = 'closed' WHERE id = ?",
                             (trade["signal_id"],),
                         )
-                        try:
+                        with contextlib.suppress(Exception):
                             await db.execute(
                                 """INSERT INTO notification_log
                                     (event_type, reference_type, reference_id, message, sent_at)
                                    VALUES ('stop_hit', 'sim_trade', ?, ?, ?)""",
-                                (trade["id"],
-                                 f"Stop hit (candle) on {trade['symbol']} {trade['side']} at {exec_price:.6f}",
-                                 now),
+                                (
+                                    trade["id"],
+                                    f"Stop hit (candle) on {trade['symbol']} {trade['side']} at {exec_price:.6f}",
+                                    now,
+                                ),
                             )
-                        except Exception:
-                            pass
                         await db.commit()
 
                     logger.info(
                         "SimTrade %d STOP (candle): %s %s exec=%.6f pnl=%.4f",
-                        trade["id"], trade["side"], trade["symbol"], exec_price, net_pnl,
+                        trade["id"],
+                        trade["side"],
+                        trade["symbol"],
+                        exec_price,
+                        net_pnl,
                     )
                     break
 
@@ -520,9 +538,7 @@ async def run_live_tracker() -> None:
                 if override:
                     intervals_needed.append(int(override))
                 else:
-                    intervals_needed.append(
-                        DEFAULT_POLL_INTERVAL.get(row[0], DEFAULT_POLL_FALLBACK)
-                    )
+                    intervals_needed.append(DEFAULT_POLL_INTERVAL.get(row[0], DEFAULT_POLL_FALLBACK))
             poll = min(intervals_needed) if intervals_needed else DEFAULT_POLL_FALLBACK
         else:
             poll = 30  # idle check every 30s when no trades open

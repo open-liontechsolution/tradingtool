@@ -1,18 +1,17 @@
 """Tests for BreakoutStrategy: MaxPrev/MinPrev calculations, entry/exit signals."""
+
 from __future__ import annotations
 
-import pytest
-import numpy as np
 import pandas as pd
 
-from backend.strategies.base import PositionState, Signal
-from backend.strategies.breakout import BreakoutStrategy
 from backend.download_engine import INTERVAL_MS
-
+from backend.strategies.base import PositionState
+from backend.strategies.breakout import BreakoutStrategy
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_df(closes, highs=None, lows=None, opens=None) -> pd.DataFrame:
     """Build a minimal DataFrame for strategy testing."""
@@ -25,14 +24,16 @@ def _make_df(closes, highs=None, lows=None, opens=None) -> pd.DataFrame:
         opens = closes
 
     step = INTERVAL_MS["1d"]
-    return pd.DataFrame({
-        "open_time": [step * i for i in range(n)],
-        "open": [float(v) for v in opens],
-        "high": [float(v) for v in highs],
-        "low": [float(v) for v in lows],
-        "close": [float(v) for v in closes],
-        "volume": [1000.0] * n,
-    })
+    return pd.DataFrame(
+        {
+            "open_time": [step * i for i in range(n)],
+            "open": [float(v) for v in opens],
+            "high": [float(v) for v in highs],
+            "low": [float(v) for v in lows],
+            "close": [float(v) for v in closes],
+            "volume": [1000.0] * n,
+        }
+    )
 
 
 def _run_strategy(closes, highs=None, lows=None, opens=None, params=None):
@@ -58,27 +59,28 @@ def _run_strategy(closes, highs=None, lows=None, opens=None, params=None):
 # MaxPrev / MinPrev computation
 # ---------------------------------------------------------------------------
 
+
 class TestMaxPrevMinPrev:
     def test_max_prev_excludes_current(self):
         """max_prev at t should use [t-N, t-1], not t."""
-        closes = list(range(1, 21))      # 1..20
-        highs  = [float(c) + 0.5 for c in closes]
+        closes = list(range(1, 21))  # 1..20
+        highs = [float(c) + 0.5 for c in closes]
         strat, df = _run_strategy(closes, highs=highs, params={"N_entrada": 5})
 
         # At t=10: max of highs[5..9] = high[9] = 9.5 + 0.5 = 9.5 ... let's compute
         t = 10
-        expected_max = max(highs[t - 5: t])
+        expected_max = max(highs[t - 5 : t])
         assert abs(float(strat.max_prev.iloc[t]) - expected_max) < 1e-6
 
     def test_min_prev_excludes_current(self):
-        lows = [float(100 - i) for i in range(30)]   # 100, 99, 98, ...
+        lows = [float(100 - i) for i in range(30)]  # 100, 99, 98, ...
         strat, df = _run_strategy(
             closes=[float(100 - i) for i in range(30)],
             lows=lows,
             params={"N_entrada": 5},
         )
         t = 10
-        expected_min = min(lows[t - 5: t])
+        expected_min = min(lows[t - 5 : t])
         assert abs(float(strat.min_prev.iloc[t]) - expected_min) < 1e-6
 
     def test_warmup_period_is_nan(self):
@@ -96,6 +98,7 @@ class TestMaxPrevMinPrev:
 # ---------------------------------------------------------------------------
 # Entry signals
 # ---------------------------------------------------------------------------
+
 
 class TestEntrySignals:
     def test_entry_long_on_breakout_above_max(self):
@@ -187,6 +190,7 @@ class TestEntrySignals:
 # Exit signals
 # ---------------------------------------------------------------------------
 
+
 class TestExitSignals:
     def test_exit_long_when_close_below_min_exit(self):
         """In long position, exit when Close < MinExit (stop not triggered)."""
@@ -195,8 +199,8 @@ class TestExitSignals:
 
         # close slightly below min_exit but low stays above stop_price
         row = df.iloc[10].copy()
-        row["close"] = 98.0   # below min_exit (rolling min of lows=99.0)
-        row["low"] = 98.5     # still above stop_price=50.0 — stop won't fire
+        row["close"] = 98.0  # below min_exit (rolling min of lows=99.0)
+        row["low"] = 98.5  # still above stop_price=50.0 — stop won't fire
 
         state = PositionState(side="long", entry_price=90.0, stop_price=50.0, quantity=1.0)
         signals = strat.on_candle(10, row, state)
@@ -209,8 +213,8 @@ class TestExitSignals:
 
         # close slightly above max_exit but high stays below stop_price
         row = df.iloc[10].copy()
-        row["close"] = 102.0   # above max_exit (rolling max of highs=101.0)
-        row["high"] = 101.5    # still below stop_price=200.0 — stop won't fire
+        row["close"] = 102.0  # above max_exit (rolling max of highs=101.0)
+        row["high"] = 101.5  # still below stop_price=200.0 — stop won't fire
 
         state = PositionState(side="short", entry_price=110.0, stop_price=200.0, quantity=1.0)
         signals = strat.on_candle(10, row, state)
@@ -230,6 +234,7 @@ class TestExitSignals:
 # ---------------------------------------------------------------------------
 # Stop loss signals
 # ---------------------------------------------------------------------------
+
 
 class TestStopLossSignals:
     def test_stop_long_triggered_by_low(self):
@@ -263,7 +268,7 @@ class TestStopLossSignals:
         strat, df = _run_strategy(closes, lows=lows, params={"N_entrada": 5, "M_salida": 3})
 
         row = df.iloc[10].copy()
-        row["low"] = 50.0   # below stop
+        row["low"] = 50.0  # below stop
         row["close"] = 0.01  # also below min_exit
 
         state = PositionState(side="long", entry_price=100.0, stop_price=80.0, quantity=1.0)
@@ -276,13 +281,21 @@ class TestStopLossSignals:
 # Parameter definitions
 # ---------------------------------------------------------------------------
 
+
 class TestParameterDefs:
     def test_get_parameters_returns_all(self):
         strat = BreakoutStrategy()
         params = strat.get_parameters()
         names = {p.name for p in params}
-        expected = {"N_entrada", "M_salida", "stop_pct", "modo_ejecucion",
-                    "habilitar_long", "habilitar_short", "coste_total_bps"}
+        expected = {
+            "N_entrada",
+            "M_salida",
+            "stop_pct",
+            "modo_ejecucion",
+            "habilitar_long",
+            "habilitar_short",
+            "coste_total_bps",
+        }
         assert expected == names
 
     def test_strategy_name(self):
