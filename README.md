@@ -1,29 +1,36 @@
 # Trading Tools Laboratory
 
-Plataforma full-stack para **descargar datos históricos de Binance Spot**, almacenarlos en SQLite, calcular métricas técnicas y ejecutar **backtests de estrategias** con una interfaz web en React.
+Plataforma full-stack para **descargar datos históricos de Binance Spot**, almacenarlos en base de datos, calcular métricas técnicas, ejecutar **backtests** y operar un flujo de **señales + simulación/live tracking** desde una interfaz web en React.
 
-## Qué incluye el proyecto
+## Qué incluye actualmente
 
 - **Backend (FastAPI)** con API REST para:
   - Descarga asíncrona de velas históricas y seguimiento de progreso.
-  - Consulta de velas almacenadas.
-  - Cálculo y persistencia de métricas derivadas.
+  - Consulta de velas y cobertura almacenada.
+  - Cálculo/persistencia de métricas derivadas.
   - Ejecución y exportación de backtests.
-- **Motor de backtesting** con registro de operaciones, curva de equity y resumen de performance.
-- **Registro de estrategias** extensible (actualmente: `breakout` y `support_resistance`).
-- **Frontend (React + Vite)** con dos módulos principales:
-  - **Data Manager** para gestión de datos y jobs de descarga.
-  - **Backtesting** para configuración, ejecución y análisis de resultados.
+  - Gestión de configuraciones de señales, señales generadas, `sim_trades` y `real_trades`.
+- **Motores en background al iniciar la app**:
+  - `run_signal_scanner()` para evaluar configuraciones activas y generar señales.
+  - `run_live_tracker()` para actualizar estado de operaciones simuladas en tiempo real.
+- **Motor de backtesting** con curva de equity, trade log y resumen de performance.
+- **Registro de estrategias extensible** (actualmente: `breakout` y `support_resistance`).
+- **Frontend (React + Vite)** con tres módulos:
+  - **Data Manager**
+  - **Backtesting**
+  - **Signals**
 
 ## Arquitectura (visión general)
 
-- `backend/app.py`: inicializa FastAPI, CORS, rutas y (si existe) sirve `frontend/dist` como sitio estático.
-- `backend/api/data_routes.py`: endpoints de datos, jobs de descarga y métricas.
+- `backend/app.py`: inicializa FastAPI, CORS, rutas y tareas de background (scanner/tracker). También sirve `frontend/dist` si existe.
+- `backend/api/data_routes.py`: endpoints de datos, descarga y métricas.
 - `backend/api/backtest_routes.py`: endpoints de estrategias y backtesting.
-- `backend/download_engine.py`: descarga en lotes desde Binance y upsert en SQLite.
+- `backend/api/signal_routes.py`: CRUD de signal configs, consulta de señales y manejo de sim/real trades.
+- `backend/download_engine.py`: descarga en lotes desde Binance y upsert en DB.
 - `backend/metrics_engine.py`: cálculo de indicadores técnicos y guardado en `derived_metrics`.
-- `backend/backtest_engine.py`: simulación de estrategias sobre velas históricas.
-- `backend/database.py`: esquema y acceso a DB SQLite (`data/trading_tools.db` por defecto).
+- `backend/signal_engine.py`: evaluación de estrategias para emitir señales.
+- `backend/live_tracker.py`: seguimiento de señales/sim trades abiertos.
+- `backend/database.py`: capa de acceso unificada para SQLite y PostgreSQL.
 - `frontend/`: SPA React con Vite y proxy `/api -> http://localhost:8000` en desarrollo.
 
 ## Requisitos
@@ -31,6 +38,16 @@ Plataforma full-stack para **descargar datos históricos de Binance Spot**, alma
 - Python **3.11+** (recomendado)
 - Node.js **18+** (recomendado)
 - npm
+
+## Configuración
+
+Variables de entorno relevantes:
+
+- `DATABASE_URL` (opcional):
+  - Si **no** se define, se usa SQLite local.
+  - Si empieza por `postgresql://`, se usa PostgreSQL (schema vía Alembic).
+- `DB_PATH` (solo SQLite): ruta del archivo DB (default: `data/trading_tools.db`).
+- `HOST` (default `0.0.0.0`), `PORT` (default `8000`), `LOG_LEVEL` (default `info`).
 
 ## Puesta en marcha local
 
@@ -43,9 +60,7 @@ pip install -r requirements.txt
 python run.py
 ```
 
-El backend queda disponible en `http://localhost:8000`.
-
-> La base de datos se crea automáticamente al iniciar. Puedes cambiar la ruta con la variable de entorno `DB_PATH`.
+Backend disponible en `http://localhost:8000`.
 
 ### 2) Frontend (modo desarrollo)
 
@@ -57,11 +72,11 @@ npm install
 npm run dev
 ```
 
-La app se abre normalmente en `http://localhost:5173`.
+Frontend disponible en `http://localhost:5173`.
 
 ## Build y despliegue unificado
 
-Para servir frontend y backend desde el mismo proceso FastAPI:
+Para servir frontend + backend desde FastAPI:
 
 ```bash
 cd frontend
@@ -77,22 +92,40 @@ Si `frontend/dist` existe, FastAPI lo monta en `/` automáticamente.
 
 ### Datos
 
-- `GET /api/pairs` → pares disponibles.
-- `POST /api/download` → inicia job de descarga.
-- `GET /api/download/{job_id}` → estado/progreso/log del job.
-- `GET /api/download/{job_id}/cancel` → cancela job.
-- `GET /api/candles` → consulta velas almacenadas.
-- `GET /api/rate-limit` → estado de peso/rate limit del cliente Binance.
-- `POST /api/metrics/compute` → calcula y guarda métricas derivadas.
-- `GET /api/coverage` → cobertura almacenada por símbolo/intervalo.
-- `GET /api/metrics/status` → conteo de métricas guardadas.
+- `GET /api/pairs`
+- `POST /api/download`
+- `GET /api/download/{job_id}`
+- `GET /api/download/{job_id}/cancel`
+- `GET /api/candles`
+- `GET /api/rate-limit`
+- `POST /api/metrics/compute`
+- `GET /api/coverage`
+- `GET /api/metrics/status`
 
 ### Backtesting
 
-- `GET /api/strategies` → estrategias registradas y parámetros.
-- `POST /api/backtest` → ejecuta backtest y devuelve `id`.
-- `GET /api/backtest/{backtest_id}` → detalle completo del resultado.
-- `GET /api/backtest/{backtest_id}/export?format=json|csv` → exportación de operaciones.
+- `GET /api/strategies`
+- `POST /api/backtest`
+- `GET /api/backtest/{backtest_id}`
+- `GET /api/backtest/{backtest_id}/export?format=json|csv`
+
+### Signals / Tracking
+
+- `POST /api/signals/configs`
+- `GET /api/signals/configs`
+- `PATCH /api/signals/configs/{config_id}`
+- `DELETE /api/signals/configs/{config_id}`
+- `GET /api/signals`
+- `GET /api/signals/status`
+- `GET /api/signals/{signal_id}`
+- `GET /api/sim-trades`
+- `GET /api/sim-trades/{trade_id}`
+- `POST /api/sim-trades/{trade_id}/close`
+- `POST /api/real-trades`
+- `GET /api/real-trades`
+- `PATCH /api/real-trades/{trade_id}`
+- `DELETE /api/real-trades/{trade_id}`
+- `GET /api/comparison/{sim_trade_id}`
 
 ## Estrategias actuales
 
@@ -104,7 +137,7 @@ Si `frontend/dist` existe, FastAPI lo monta en `/` automáticamente.
   - Niveles de soporte/resistencia mediante zigzag sin lookahead.
   - Entradas por quiebre y stops porcentuales.
 
-## Métricas derivadas disponibles (motor de métricas)
+## Métricas derivadas disponibles
 
 - Retornos: `returns_log`, `returns_simple`
 - Rango: `range`, `true_range`
@@ -120,9 +153,15 @@ Si `frontend/dist` existe, FastAPI lo monta en `/` automáticamente.
 pytest -q
 ```
 
-El repositorio incluye tests unitarios para backtest, métricas, descarga y estrategias en `tests/`.
+El repositorio incluye tests unitarios en `tests/` para:
 
-## Estructura rápida del repositorio
+- descarga de datos
+- cálculo de métricas
+- engine de backtest
+- estrategias
+- live tracker y signal engine
+
+## Estructura rápida
 
 ```text
 backend/
@@ -132,18 +171,20 @@ backend/
   backtest_engine.py
   download_engine.py
   metrics_engine.py
+  signal_engine.py
+  live_tracker.py
   database.py
 frontend/
   src/components/
-  package.json
 run.py
 tests/
+alembic/
 requirements.txt
 ```
 
 ## Próximas mejoras sugeridas
 
-- Añadir autenticación y control de acceso para entornos multiusuario.
-- Persistir resultados de backtests en DB (actualmente se almacenan en memoria).
-- Incluir Docker Compose para entorno reproducible (backend + frontend + volumen DB).
-- Incorporar CI (lint + tests) y badges en este README.
+- Persistir resultados de backtests en DB (hoy viven en memoria por `backtest_id`).
+- Añadir autenticación/autorización para entornos multiusuario.
+- Incorporar CI (lint + tests + build frontend) y badges.
+- Añadir Docker Compose para entorno reproducible (app + DB + frontend build).
