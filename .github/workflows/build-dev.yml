@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - develop
+    paths-ignore:
+      - ".github/workflows/**"
 
 env:
   REGISTRY: ghcr.io
@@ -45,3 +47,11 @@ jobs:
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:dev-latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Delete old package versions (keep last 5)
+        uses: actions/delete-package-versions@v5
+        with:
+          package-name: tradingtools
+          package-type: container
+          min-versions-to-keep: 5
+          delete-only-untagged-versions: false
