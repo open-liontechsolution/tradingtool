@@ -16,3 +16,7 @@ TradingTools has been deployed.
    kubectl create secret generic {{ .Values.existingSecret }} \
      --from-literal=DATABASE_URL="postgresql://user:password@host:5432/dbname" \
      -n {{ .Release.Namespace }}
+
+4. Optional: If you want the chart to create the Namespace, set:
+   namespace.create=true
+   namespace.name={{ .Values.namespace.name }}

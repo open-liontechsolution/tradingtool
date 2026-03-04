@@ -1,5 +1,9 @@
 replicaCount: 1
 
+namespace:
+  name: "tradingtool"
+  create: false
+
 image:
   repository: ghcr.io/open-liontechsolution/tradingtools
   tag: "latest"
