@@ -1,0 +1,17 @@
+image:
+  tag: "dev-latest"
+
+namespace:
+  name: "tradingtool-dev"
+  create: true
+
+config:
+  LOG_LEVEL: "debug"
+
+existingSecret: "tradingtools-secret-dev"
+
+networkPolicy:
+  # Enable egress NetworkPolicy to allow traffic to the PostgreSQL namespace
+  enabled: true
+  # Namespace where PostgreSQL is deployed
+  postgresNamespace: "data-dev"
