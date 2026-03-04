@@ -1,15 +1,11 @@
 image:
-  tag: "dev-latest"
-
+  tag: "dev-466093c"
 namespace:
   name: "tradingtool-dev"
   create: true
-
 config:
   LOG_LEVEL: "debug"
-
 existingSecret: "tradingtools-secret-dev"
-
 networkPolicy:
   # Enable egress NetworkPolicy to allow traffic to the PostgreSQL namespace
   enabled: true
