@@ -13,11 +13,12 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.responses import Response
 
 from backend.api.backtest_routes import router as backtest_router
 from backend.api.data_routes import router as data_router
 from backend.api.signal_routes import router as signal_router
-from backend.database import init_db
+from backend.database import get_db, init_db
 from backend.live_tracker import run_live_tracker
 from backend.signal_engine import run_signal_scanner
 
@@ -62,6 +63,23 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 app.include_router(data_router, prefix="/api")
 app.include_router(backtest_router, prefix="/api")
 app.include_router(signal_router, prefix="/api")
+
+
+@app.get("/healthz", tags=["health"])
+async def liveness() -> JSONResponse:
+    return JSONResponse(content={"status": "alive"})
+
+
+@app.get("/readyz", tags=["health"])
+async def readiness() -> Response:
+    try:
+        async with get_db() as db:
+            await db.execute("SELECT 1")
+        return JSONResponse(content={"status": "ready"})
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Readiness check failed: %s", exc)
+        return JSONResponse(status_code=503, content={"status": "unavailable", "detail": str(exc)})
+
 
 # Serve frontend static files if the dist directory exists
 frontend_dist = Path(__file__).parent.parent / "frontend" / "dist"

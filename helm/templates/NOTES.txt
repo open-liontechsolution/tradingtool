@@ -1,0 +1,18 @@
+TradingTools has been deployed.
+
+1. Get the application URL:
+{{- if .Values.ingress.enabled }}
+   http{{ if .Values.ingress.tls }}s{{ end }}://{{ .Values.ingress.host }}{{ .Values.ingress.path }}
+{{- else }}
+   kubectl port-forward svc/{{ include "tradingtools.fullname" . }} 8000:{{ .Values.service.port }} -n {{ .Release.Namespace }}
+   Then open: http://127.0.0.1:8000
+{{- end }}
+
+2. Check health endpoints:
+   curl http://<app-host>/healthz   # liveness
+   curl http://<app-host>/readyz    # readiness (checks DB connectivity)
+
+3. Make sure the secret '{{ .Values.existingSecret }}' exists in namespace '{{ .Release.Namespace }}':
+   kubectl create secret generic {{ .Values.existingSecret }} \
+     --from-literal=DATABASE_URL="postgresql://user:password@host:5432/dbname" \
+     -n {{ .Release.Namespace }}
