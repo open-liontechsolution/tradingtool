@@ -6,6 +6,7 @@ on:
       - develop
     paths-ignore:
       - ".github/workflows/**"
+      - "helm/env/**"
 
 env:
   REGISTRY: ghcr.io

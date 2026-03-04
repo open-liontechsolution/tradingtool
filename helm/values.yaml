@@ -1,0 +1,53 @@
+replicaCount: 1
+
+image:
+  repository: ghcr.io/open-liontechsolution/tradingtools
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+# Name of an existing Kubernetes Secret that contains the sensitive env vars.
+# Create the secret manually before deploying, e.g.:
+#   kubectl create secret generic tradingtools-secret \
+#     --from-literal=DATABASE_URL="postgresql://user:password@host:5432/dbname"
+#
+# Required keys:
+#   DATABASE_URL  — full PostgreSQL connection string
+#                   e.g. postgresql://user:password@postgres-host:5432/dbname
+existingSecret: "tradingtools-secret"
+
+# Non-sensitive configuration — rendered into a ConfigMap
+config:
+  PORT: "8000"
+  HOST: "0.0.0.0"
+  LOG_LEVEL: "info"
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+service:
+  type: ClusterIP
+  port: 8000
+
+networkPolicy:
+  # Enable egress NetworkPolicy to allow traffic to the PostgreSQL namespace
+  enabled: true
+  # Namespace where PostgreSQL is deployed
+  postgresNamespace: "databases"
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+    # nginx.ingress.kubernetes.io/rewrite-target: /
+  host: "tradingtools.example.com"
+  path: /
+  pathType: Prefix
+  tls: []
+  #  - secretName: tradingtools-tls
+  #    hosts:
+  #      - tradingtools.example.com
