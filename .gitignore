@@ -48,6 +48,3 @@ Thumbs.db
 
 # Alembic generated (keep versions/ tracked, ignore auto-generated cache)
 alembic/__pycache__/
-
-# Helm private values
-helm/env
