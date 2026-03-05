@@ -26,4 +26,13 @@ spec:
       ports:
         - protocol: TCP
           port: 5432
+    # Allow outbound internet (HTTP/HTTPS)
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 80
+        - protocol: TCP
+          port: 443
 {{- end }}
