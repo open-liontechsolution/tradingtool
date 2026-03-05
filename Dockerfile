@@ -1,12 +1,13 @@
 # ---------------------------------------------------------------------------
 # Stage 1: Build frontend
 # ---------------------------------------------------------------------------
-FROM node:22-alpine AS frontend-build
+FROM --platform=$BUILDPLATFORM node:22-alpine AS frontend-build
 
 WORKDIR /app/frontend
 
 COPY frontend/package.json frontend/package-lock.json ./
-RUN npm ci --production=false
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --production=false
 
 COPY frontend/ ./
 RUN npm run build
@@ -24,7 +25,8 @@ WORKDIR /app
 
 # Install Python dependencies as root before switching user
 COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --no-cache-dir -r requirements.txt
 
 # Copy backend source
 COPY backend/ ./backend/

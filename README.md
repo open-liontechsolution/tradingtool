@@ -188,4 +188,3 @@ requirements.txt
 - Añadir autenticación/autorización para entornos multiusuario.
 - Incorporar CI (lint + tests + build frontend) y badges.
 - Añadir Docker Compose para entorno reproducible (app + DB + frontend build).
-
