@@ -35,4 +35,8 @@ spec:
           port: 80
         - protocol: TCP
           port: 443
+        - protocol: TCP
+          port: 7844
+        - protocol: UDP
+          port: 7844
 {{- end }}
