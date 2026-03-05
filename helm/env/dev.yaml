@@ -6,6 +6,9 @@ namespace:
 config:
   LOG_LEVEL: "debug"
 existingSecret: "tradingtools-secret-dev"
+cloudflareTunnel:
+  enabled: true
+  existingSecret: "tradingtools-secret-dev"
 networkPolicy:
   # Enable egress NetworkPolicy to allow traffic to the PostgreSQL namespace
   enabled: true
