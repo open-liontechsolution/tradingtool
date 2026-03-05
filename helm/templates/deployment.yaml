@@ -45,3 +45,22 @@ spec:
             failureThreshold: 3
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+        {{- if .Values.cloudflareTunnel.enabled }}
+        - name: cloudflared
+          image: "{{ .Values.cloudflareTunnel.image.repository }}:{{ .Values.cloudflareTunnel.image.tag }}"
+          imagePullPolicy: {{ .Values.cloudflareTunnel.image.pullPolicy }}
+          args:
+            - tunnel
+            - --no-autoupdate
+            - run
+            - --token
+            - $(CLOUDFLARE_TUNNEL_TOKEN)
+          env:
+            - name: CLOUDFLARE_TUNNEL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.cloudflareTunnel.existingSecret }}
+                  key: {{ .Values.cloudflareTunnel.secretKey }}
+          resources:
+            {{- toYaml .Values.cloudflareTunnel.resources | nindent 12 }}
+        {{- end }}

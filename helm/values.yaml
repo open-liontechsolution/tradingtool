@@ -43,6 +43,24 @@ networkPolicy:
   # Namespace where PostgreSQL is deployed
   postgresNamespace: "databases"
 
+cloudflareTunnel:
+  enabled: false
+  # Secret containing the CLOUDFLARE_TUNNEL_TOKEN key.
+  # Can be the same as existingSecret or a dedicated one.
+  existingSecret: "tradingtools-secret"
+  secretKey: "CLOUDFLARE_TUNNEL_TOKEN"
+  image:
+    repository: cloudflare/cloudflared
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+
 ingress:
   enabled: false
   className: ""
