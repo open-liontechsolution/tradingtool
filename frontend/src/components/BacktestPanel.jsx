@@ -316,7 +316,7 @@ export default function BacktestPanel() {
     }
   }, [selectedStrat])
 
-  useEffect(() => { fetchStrategies() }, [])
+  useEffect(() => { fetchStrategies() }, [fetchStrategies])
 
   // When strategy changes, reset param defaults
   const handleStrategyChange = e => {

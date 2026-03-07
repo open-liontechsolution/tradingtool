@@ -15,12 +15,10 @@ from __future__ import annotations
 
 import json
 import logging
-import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
-import httpx
 import jwt
 from fastapi import Depends, HTTPException, Request
 from jwt import PyJWKClient

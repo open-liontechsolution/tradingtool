@@ -1,9 +1,8 @@
-import { createContext, useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { UserManager, WebStorageStateStore } from 'oidc-client-ts'
 import { AUTH_ENABLED, oidcConfig } from './authConfig'
 import { setAccessToken } from './apiFetch'
-
-export const AuthContext = createContext(undefined)
+import { AuthContext } from './AuthContext'
 
 // ---------------------------------------------------------------------------
 // Mock user for local dev (AUTH_ENABLED=false)
