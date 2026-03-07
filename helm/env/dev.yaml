@@ -5,6 +5,11 @@ namespace:
   create: true
 config:
   LOG_LEVEL: "debug"
+  AUTH_ENABLED: "true"
+  KEYCLOAK_URL: "https://keycloak-dev.liontechsolution.com"
+  KEYCLOAK_REALM: "tradingtool-dev"
+  KEYCLOAK_AUDIENCE: "tradingtool-api"
+  CORS_ORIGINS: "*"
 existingSecret: "tradingtools-secret-dev"
 cloudflareTunnel:
   enabled: true

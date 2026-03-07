@@ -8,7 +8,7 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -18,6 +18,8 @@ from starlette.responses import Response
 from backend.api.backtest_routes import router as backtest_router
 from backend.api.data_routes import router as data_router
 from backend.api.signal_routes import router as signal_router
+from backend.auth import get_current_user, require_admin
+from backend.config import CORS_ORIGINS
 from backend.database import get_db, init_db
 from backend.live_tracker import run_live_tracker
 from backend.signal_engine import run_signal_scanner
@@ -47,9 +49,10 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=CORS_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
+    allow_credentials=True,
 )
 
 
@@ -60,9 +63,9 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     return JSONResponse(status_code=422, content={"detail": exc.errors(), "body": body.decode()})
 
 
-app.include_router(data_router, prefix="/api")
-app.include_router(backtest_router, prefix="/api")
-app.include_router(signal_router, prefix="/api")
+app.include_router(data_router, prefix="/api", dependencies=[Depends(require_admin)])
+app.include_router(backtest_router, prefix="/api", dependencies=[Depends(get_current_user)])
+app.include_router(signal_router, prefix="/api", dependencies=[Depends(get_current_user)])
 
 
 @app.get("/healthz", tags=["health"])
