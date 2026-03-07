@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { apiFetch } from '../auth/apiFetch'
 import EquityChart from './EquityChart'
 import TradeLog from './TradeLog'
 import TradeReviewChart from './TradeReviewChart'
@@ -296,7 +297,7 @@ export default function BacktestPanel() {
   // Fetch available strategies
   const fetchStrategies = useCallback(async () => {
     try {
-      const res = await fetch('/api/strategies')
+      const res = await apiFetch('/api/strategies')
       if (!res.ok) return
       const data = await res.json()
       const list = data.strategies ?? []
@@ -315,7 +316,7 @@ export default function BacktestPanel() {
     }
   }, [selectedStrat])
 
-  useEffect(() => { fetchStrategies() }, [])
+  useEffect(() => { fetchStrategies() }, [fetchStrategies])
 
   // When strategy changes, reset param defaults
   const handleStrategyChange = e => {
@@ -339,7 +340,7 @@ export default function BacktestPanel() {
   const fetchResult = useCallback(async (id) => {
     setLoadingRes(true)
     try {
-      const res = await fetch(`/api/backtest/${id}`)
+      const res = await apiFetch(`/api/backtest/${id}`)
       if (!res.ok) { setError(`Could not fetch backtest ${id}`); return }
       const data = await res.json()
       setResult(data)
@@ -361,7 +362,7 @@ export default function BacktestPanel() {
     setLoading(true)
 
     try {
-      const res = await fetch('/api/backtest', {
+      const res = await apiFetch('/api/backtest', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

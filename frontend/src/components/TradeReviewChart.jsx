@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { createChart, ColorType } from 'lightweight-charts'
+import { apiFetch } from '../auth/apiFetch'
 
 export default function TradeReviewChart({ symbol, interval, startMs, endMs, trades }) {
   const containerRef = useRef(null)
@@ -18,7 +19,7 @@ export default function TradeReviewChart({ symbol, interval, startMs, endMs, tra
 
       try {
         const url = `/api/candles?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}&start=${startMs}&end=${endMs}&limit=10000`
-        const res = await fetch(url)
+        const res = await apiFetch(url)
         if (!res.ok) throw new Error(`Failed to fetch candles: HTTP ${res.status}`)
         const data = await res.json()
         const candles = data.candles ?? []

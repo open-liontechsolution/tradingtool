@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
+import { apiFetch } from '../auth/apiFetch'
 
 const PAIRS = [
   'BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'XRPUSDT',
@@ -250,7 +251,7 @@ export default function DataManager() {
   // Poll rate limit
   const fetchRateLimit = useCallback(async () => {
     try {
-      const res = await fetch('/api/rate-limit')
+      const res = await apiFetch('/api/rate-limit')
       if (!res.ok) return
       const data = await res.json()
       setRateLimit(data)
@@ -262,7 +263,7 @@ export default function DataManager() {
   // Fetch data coverage
   const fetchCoverage = useCallback(async () => {
     try {
-      const res = await fetch('/api/coverage')
+      const res = await apiFetch('/api/coverage')
       if (!res.ok) return
       const data = await res.json()
       setCoverage(data.coverage)
@@ -274,7 +275,7 @@ export default function DataManager() {
   // Fetch metrics status
   const fetchMetricsStatus = useCallback(async () => {
     try {
-      const res = await fetch('/api/metrics/status')
+      const res = await apiFetch('/api/metrics/status')
       if (!res.ok) return
       const data = await res.json()
       setMetricsStatus(data)
@@ -286,7 +287,7 @@ export default function DataManager() {
   // Poll job status
   const pollJob = useCallback(async (jobId) => {
     try {
-      const res = await fetch(`/api/download/${jobId}`)
+      const res = await apiFetch(`/api/download/${jobId}`)
       if (!res.ok) return
       const data = await res.json()
       setJobData(data)
@@ -338,7 +339,7 @@ export default function DataManager() {
     setActiveJobId(null)
 
     try {
-      const res = await fetch('/api/download', {
+      const res = await apiFetch('/api/download', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -367,7 +368,7 @@ export default function DataManager() {
   const handleCancel = async () => {
     if (!activeJobId) return
     try {
-      await fetch(`/api/download/${activeJobId}/cancel`)
+      await apiFetch(`/api/download/${activeJobId}/cancel`)
     } catch {
       // ignore
     }
@@ -376,7 +377,7 @@ export default function DataManager() {
   const handleComputeMetrics = async () => {
     setComputingMetrics(true)
     try {
-      await fetch('/api/metrics/compute', {
+      await apiFetch('/api/metrics/compute', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ symbol, interval }),

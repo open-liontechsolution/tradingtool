@@ -24,6 +24,11 @@ config:
   PORT: "8000"
   HOST: "0.0.0.0"
   LOG_LEVEL: "info"
+  AUTH_ENABLED: "false"
+  KEYCLOAK_URL: ""
+  KEYCLOAK_REALM: "tradingtool-dev"
+  KEYCLOAK_AUDIENCE: "tradingtool-api"
+  CORS_ORIGINS: "*"
 
 resources:
   requests:

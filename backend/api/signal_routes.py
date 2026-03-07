@@ -6,9 +6,10 @@ import json
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
+from backend.auth import AuthUser, get_current_user
 from backend.database import get_db
 
 router = APIRouter(tags=["signals"])
@@ -73,7 +74,10 @@ class RealTradePatch(BaseModel):
 
 
 @router.post("/signals/configs")
-async def create_signal_config(req: SignalConfigCreate) -> dict:
+async def create_signal_config(
+    req: SignalConfigCreate,
+    user: AuthUser = Depends(get_current_user),
+) -> dict:
     """Create a new signal config."""
     from backend.strategies import get_strategy
 
@@ -93,12 +97,13 @@ async def create_signal_config(req: SignalConfigCreate) -> dict:
         try:
             cursor = await db.execute(
                 """INSERT INTO signal_configs
-                    (symbol, interval, strategy, params, stop_cross_pct,
+                    (user_id, symbol, interval, strategy, params, stop_cross_pct,
                      portfolio, invested_amount, leverage, cost_bps,
                      polling_interval_s, active, last_processed_candle,
                      created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?)""",
                 (
+                    user.id,
                     req.symbol.upper(),
                     req.interval,
                     req.strategy,
@@ -129,14 +134,16 @@ async def create_signal_config(req: SignalConfigCreate) -> dict:
 @router.get("/signals/configs")
 async def list_signal_configs(
     active_only: bool = Query(False),
+    user: AuthUser = Depends(get_current_user),
 ) -> dict:
-    """List all signal configs."""
+    """List signal configs owned by the current user."""
     async with get_db() as db:
-        query = "SELECT * FROM signal_configs"
+        query = "SELECT * FROM signal_configs WHERE user_id = ?"
+        params: list[Any] = [user.id]
         if active_only:
-            query += " WHERE active = 1"
+            query += " AND active = 1"
         query += " ORDER BY id DESC"
-        cursor = await db.execute(query)
+        cursor = await db.execute(query, params)
         rows = await cursor.fetchall()
         cols = [d[0] for d in cursor.description]
     configs = []
@@ -149,7 +156,11 @@ async def list_signal_configs(
 
 
 @router.patch("/signals/configs/{config_id}")
-async def patch_signal_config(config_id: int, req: SignalConfigPatch) -> dict:
+async def patch_signal_config(
+    config_id: int,
+    req: SignalConfigPatch,
+    user: AuthUser = Depends(get_current_user),
+) -> dict:
     """Update a signal config (activate/deactivate, change params)."""
     fields: list[str] = []
     values: list[Any] = []
@@ -182,10 +193,11 @@ async def patch_signal_config(config_id: int, req: SignalConfigPatch) -> dict:
     fields.append("updated_at = ?")
     values.append(_now_iso())
     values.append(config_id)
+    values.append(user.id)
 
     async with get_db() as db:
         cursor = await db.execute(
-            f"UPDATE signal_configs SET {', '.join(fields)} WHERE id = ?",
+            f"UPDATE signal_configs SET {', '.join(fields)} WHERE id = ? AND user_id = ?",
             values,
         )
         await db.commit()
@@ -196,10 +208,21 @@ async def patch_signal_config(config_id: int, req: SignalConfigPatch) -> dict:
 
 
 @router.delete("/signals/configs/{config_id}")
-async def delete_signal_config(config_id: int) -> dict:
+async def delete_signal_config(
+    config_id: int,
+    user: AuthUser = Depends(get_current_user),
+) -> dict:
     """Delete a signal config. Closes any open SimTrades for it."""
     now = _now_iso()
     async with get_db() as db:
+        # Verify ownership
+        cursor = await db.execute(
+            "SELECT id FROM signal_configs WHERE id = ? AND user_id = ?",
+            (config_id, user.id),
+        )
+        if await cursor.fetchone() is None:
+            raise HTTPException(404, f"Config {config_id} not found")
+
         # Close open sim trades
         await db.execute(
             """UPDATE sim_trades SET status = 'closed', exit_reason = 'config_deleted',
@@ -212,13 +235,11 @@ async def delete_signal_config(config_id: int) -> dict:
                WHERE config_id = ? AND status IN ('pending', 'active')""",
             (config_id,),
         )
-        cursor = await db.execute(
+        await db.execute(
             "DELETE FROM signal_configs WHERE id = ?",
             (config_id,),
         )
         await db.commit()
-        if cursor.rowcount == 0:
-            raise HTTPException(404, f"Config {config_id} not found")
     return {"id": config_id, "status": "deleted"}
 
 
@@ -232,8 +253,9 @@ async def list_signals(
     config_id: int | None = Query(None),
     status: str | None = Query(None),
     limit: int = Query(50, le=500),
+    user: AuthUser = Depends(get_current_user),
 ) -> dict:
-    """List generated signals, enriched with SimTrade entry price."""
+    """List generated signals owned by the current user."""
     query = """
         SELECT s.*,
                st.id       AS sim_trade_id,
@@ -243,10 +265,10 @@ async def list_signals(
                sc.params   AS config_params
         FROM signals s
         LEFT JOIN sim_trades st ON st.signal_id = s.id
-        LEFT JOIN signal_configs sc ON s.config_id = sc.id
-        WHERE 1=1
+        JOIN signal_configs sc ON s.config_id = sc.id
+        WHERE sc.user_id = ?
     """
-    params: list[Any] = []
+    params: list[Any] = [user.id]
     if config_id is not None:
         query += " AND s.config_id = ?"
         params.append(config_id)
@@ -263,19 +285,37 @@ async def list_signals(
 
 
 @router.get("/signals/status")
-async def signals_status() -> dict:
-    """Status overview: open trades, active configs, recent signals."""
+async def signals_status(user: AuthUser = Depends(get_current_user)) -> dict:
+    """Status overview for the current user's trades and configs."""
     async with get_db() as db:
-        cursor = await db.execute("SELECT COUNT(*) FROM signal_configs WHERE active = 1")
+        cursor = await db.execute(
+            "SELECT COUNT(*) FROM signal_configs WHERE active = 1 AND user_id = ?",
+            (user.id,),
+        )
         active_configs = (await cursor.fetchone())[0]
 
-        cursor = await db.execute("SELECT COUNT(*) FROM sim_trades WHERE status = 'open'")
+        cursor = await db.execute(
+            """SELECT COUNT(*) FROM sim_trades st
+               JOIN signal_configs sc ON st.config_id = sc.id
+               WHERE st.status = 'open' AND sc.user_id = ?""",
+            (user.id,),
+        )
         open_trades = (await cursor.fetchone())[0]
 
-        cursor = await db.execute("SELECT COUNT(*) FROM sim_trades WHERE status = 'pending_entry'")
+        cursor = await db.execute(
+            """SELECT COUNT(*) FROM sim_trades st
+               JOIN signal_configs sc ON st.config_id = sc.id
+               WHERE st.status = 'pending_entry' AND sc.user_id = ?""",
+            (user.id,),
+        )
         pending_trades = (await cursor.fetchone())[0]
 
-        cursor = await db.execute("SELECT COUNT(*) FROM signals WHERE created_at > datetime('now', '-24 hours')")
+        cursor = await db.execute(
+            """SELECT COUNT(*) FROM signals s
+               JOIN signal_configs sc ON s.config_id = sc.id
+               WHERE s.created_at > datetime('now', '-24 hours') AND sc.user_id = ?""",
+            (user.id,),
+        )
         recent_signals = (await cursor.fetchone())[0]
 
     return {
@@ -287,10 +327,18 @@ async def signals_status() -> dict:
 
 
 @router.get("/signals/{signal_id}")
-async def get_signal(signal_id: int) -> dict:
-    """Get a single signal by ID."""
+async def get_signal(
+    signal_id: int,
+    user: AuthUser = Depends(get_current_user),
+) -> dict:
+    """Get a single signal by ID (verifies ownership)."""
     async with get_db() as db:
-        cursor = await db.execute("SELECT * FROM signals WHERE id = ?", (signal_id,))
+        cursor = await db.execute(
+            """SELECT s.* FROM signals s
+               JOIN signal_configs sc ON s.config_id = sc.id
+               WHERE s.id = ? AND sc.user_id = ?""",
+            (signal_id, user.id),
+        )
         row = await cursor.fetchone()
         if row is None:
             raise HTTPException(404, f"Signal {signal_id} not found")
@@ -308,15 +356,16 @@ async def list_sim_trades(
     config_id: int | None = Query(None),
     status: str | None = Query(None),
     limit: int = Query(50, le=500),
+    user: AuthUser = Depends(get_current_user),
 ) -> dict:
-    """List SimTrades."""
+    """List SimTrades owned by the current user."""
     query = """
         SELECT st.*, sc.strategy AS config_strategy, sc.params AS config_params
         FROM sim_trades st
-        LEFT JOIN signal_configs sc ON st.config_id = sc.id
-        WHERE 1=1
+        JOIN signal_configs sc ON st.config_id = sc.id
+        WHERE sc.user_id = ?
     """
-    params: list[Any] = []
+    params: list[Any] = [user.id]
     if config_id is not None:
         query += " AND st.config_id = ?"
         params.append(config_id)
@@ -333,10 +382,18 @@ async def list_sim_trades(
 
 
 @router.get("/sim-trades/{trade_id}")
-async def get_sim_trade(trade_id: int) -> dict:
-    """Get a single SimTrade by ID."""
+async def get_sim_trade(
+    trade_id: int,
+    user: AuthUser = Depends(get_current_user),
+) -> dict:
+    """Get a single SimTrade by ID (verifies ownership)."""
     async with get_db() as db:
-        cursor = await db.execute("SELECT * FROM sim_trades WHERE id = ?", (trade_id,))
+        cursor = await db.execute(
+            """SELECT st.* FROM sim_trades st
+               JOIN signal_configs sc ON st.config_id = sc.id
+               WHERE st.id = ? AND sc.user_id = ?""",
+            (trade_id, user.id),
+        )
         row = await cursor.fetchone()
         if row is None:
             raise HTTPException(404, f"SimTrade {trade_id} not found")
@@ -345,12 +402,17 @@ async def get_sim_trade(trade_id: int) -> dict:
 
 
 @router.post("/sim-trades/{trade_id}/close")
-async def close_sim_trade(trade_id: int) -> dict:
+async def close_sim_trade(
+    trade_id: int,
+    user: AuthUser = Depends(get_current_user),
+) -> dict:
     """Manually close an open SimTrade at current market price."""
     async with get_db() as db:
         cursor = await db.execute(
-            "SELECT * FROM sim_trades WHERE id = ? AND status = 'open'",
-            (trade_id,),
+            """SELECT st.* FROM sim_trades st
+               JOIN signal_configs sc ON st.config_id = sc.id
+               WHERE st.id = ? AND st.status = 'open' AND sc.user_id = ?""",
+            (trade_id, user.id),
         )
         row = await cursor.fetchone()
         if row is None:
@@ -418,10 +480,33 @@ async def close_sim_trade(trade_id: int) -> dict:
 
 
 @router.post("/real-trades")
-async def create_real_trade(req: RealTradeCreate) -> dict:
+async def create_real_trade(
+    req: RealTradeCreate,
+    user: AuthUser = Depends(get_current_user),
+) -> dict:
     """Register a real trade, optionally linked to a SimTrade/Signal."""
     now = _now_iso()
     async with get_db() as db:
+        # Verify ownership of linked sim_trade or signal if provided
+        if req.sim_trade_id is not None:
+            cursor = await db.execute(
+                """SELECT st.id FROM sim_trades st
+                   JOIN signal_configs sc ON st.config_id = sc.id
+                   WHERE st.id = ? AND sc.user_id = ?""",
+                (req.sim_trade_id, user.id),
+            )
+            if await cursor.fetchone() is None:
+                raise HTTPException(404, "Linked SimTrade not found")
+        if req.signal_id is not None:
+            cursor = await db.execute(
+                """SELECT s.id FROM signals s
+                   JOIN signal_configs sc ON s.config_id = sc.id
+                   WHERE s.id = ? AND sc.user_id = ?""",
+                (req.signal_id, user.id),
+            )
+            if await cursor.fetchone() is None:
+                raise HTTPException(404, "Linked Signal not found")
+
         cursor = await db.execute(
             """INSERT INTO real_trades
                 (sim_trade_id, signal_id, symbol, side, entry_price, entry_time,
@@ -451,17 +536,24 @@ async def list_real_trades(
     sim_trade_id: int | None = Query(None),
     status: str | None = Query(None),
     limit: int = Query(50, le=500),
+    user: AuthUser = Depends(get_current_user),
 ) -> dict:
-    """List real trades."""
-    query = "SELECT * FROM real_trades WHERE 1=1"
-    params: list[Any] = []
+    """List real trades owned by the current user."""
+    query = """
+        SELECT rt.* FROM real_trades rt
+        LEFT JOIN sim_trades st ON rt.sim_trade_id = st.id
+        LEFT JOIN signals sg ON rt.signal_id = sg.id
+        LEFT JOIN signal_configs sc ON COALESCE(st.config_id, sg.config_id) = sc.id
+        WHERE sc.user_id = ?
+    """
+    params: list[Any] = [user.id]
     if sim_trade_id is not None:
-        query += " AND sim_trade_id = ?"
+        query += " AND rt.sim_trade_id = ?"
         params.append(sim_trade_id)
     if status is not None:
-        query += " AND status = ?"
+        query += " AND rt.status = ?"
         params.append(status)
-    query += f" ORDER BY id DESC LIMIT {limit}"
+    query += f" ORDER BY rt.id DESC LIMIT {limit}"
 
     async with get_db() as db:
         cursor = await db.execute(query, params)
@@ -471,8 +563,25 @@ async def list_real_trades(
 
 
 @router.patch("/real-trades/{trade_id}")
-async def patch_real_trade(trade_id: int, req: RealTradePatch) -> dict:
+async def patch_real_trade(
+    trade_id: int,
+    req: RealTradePatch,
+    user: AuthUser = Depends(get_current_user),
+) -> dict:
     """Update a real trade (close it, add notes, etc.)."""
+    # Verify ownership
+    async with get_db() as db:
+        cursor = await db.execute(
+            """SELECT rt.id FROM real_trades rt
+               LEFT JOIN sim_trades st ON rt.sim_trade_id = st.id
+               LEFT JOIN signals sg ON rt.signal_id = sg.id
+               LEFT JOIN signal_configs sc ON COALESCE(st.config_id, sg.config_id) = sc.id
+               WHERE rt.id = ? AND sc.user_id = ?""",
+            (trade_id, user.id),
+        )
+        if await cursor.fetchone() is None:
+            raise HTTPException(404, f"RealTrade {trade_id} not found")
+
     fields: list[str] = []
     values: list[Any] = []
 
@@ -529,16 +638,29 @@ async def patch_real_trade(trade_id: int, req: RealTradePatch) -> dict:
 
 
 @router.delete("/real-trades/{trade_id}")
-async def delete_real_trade(trade_id: int) -> dict:
-    """Delete a real trade."""
+async def delete_real_trade(
+    trade_id: int,
+    user: AuthUser = Depends(get_current_user),
+) -> dict:
+    """Delete a real trade (verifies ownership)."""
     async with get_db() as db:
+        # Verify ownership
         cursor = await db.execute(
+            """SELECT rt.id FROM real_trades rt
+               LEFT JOIN sim_trades st ON rt.sim_trade_id = st.id
+               LEFT JOIN signals sg ON rt.signal_id = sg.id
+               LEFT JOIN signal_configs sc ON COALESCE(st.config_id, sg.config_id) = sc.id
+               WHERE rt.id = ? AND sc.user_id = ?""",
+            (trade_id, user.id),
+        )
+        if await cursor.fetchone() is None:
+            raise HTTPException(404, f"RealTrade {trade_id} not found")
+
+        await db.execute(
             "DELETE FROM real_trades WHERE id = ?",
             (trade_id,),
         )
         await db.commit()
-        if cursor.rowcount == 0:
-            raise HTTPException(404, f"RealTrade {trade_id} not found")
     return {"id": trade_id, "status": "deleted"}
 
 
@@ -548,12 +670,17 @@ async def delete_real_trade(trade_id: int) -> dict:
 
 
 @router.get("/comparison/{sim_trade_id}")
-async def compare_trades(sim_trade_id: int) -> dict:
-    """Compare a SimTrade with its linked RealTrade(s)."""
+async def compare_trades(
+    sim_trade_id: int,
+    user: AuthUser = Depends(get_current_user),
+) -> dict:
+    """Compare a SimTrade with its linked RealTrade(s) (verifies ownership)."""
     async with get_db() as db:
         cursor = await db.execute(
-            "SELECT * FROM sim_trades WHERE id = ?",
-            (sim_trade_id,),
+            """SELECT st.* FROM sim_trades st
+               JOIN signal_configs sc ON st.config_id = sc.id
+               WHERE st.id = ? AND sc.user_id = ?""",
+            (sim_trade_id, user.id),
         )
         sim_row = await cursor.fetchone()
         if sim_row is None:

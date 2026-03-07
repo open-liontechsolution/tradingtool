@@ -199,8 +199,19 @@ async def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_derived_symbol_interval
                 ON derived_metrics (symbol, interval);
 
+            CREATE TABLE IF NOT EXISTS users (
+                id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+                keycloak_sub            TEXT    NOT NULL UNIQUE,
+                email                   TEXT,
+                username                TEXT,
+                roles                   TEXT    NOT NULL DEFAULT '[]',
+                created_at              TEXT    NOT NULL,
+                last_login_at           TEXT    NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS signal_configs (
                 id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id                 INTEGER REFERENCES users(id),
                 symbol                  TEXT    NOT NULL,
                 interval                TEXT    NOT NULL,
                 strategy                TEXT    NOT NULL,
@@ -301,4 +312,18 @@ async def init_db() -> None:
             CREATE UNIQUE INDEX IF NOT EXISTS idx_notification_dedup
                 ON notification_log (event_type, reference_type, reference_id);
         """)
+        await db.commit()
+
+        # ------------------------------------------------------------------
+        # SQLite migrations for existing databases
+        # ------------------------------------------------------------------
+        # Add user_id to signal_configs if it doesn't exist yet (existing DBs).
+        cursor = await db.execute("PRAGMA table_info(signal_configs)")
+        columns = {row[1] for row in await cursor.fetchall()}
+        if "user_id" not in columns:
+            await db.execute("ALTER TABLE signal_configs ADD COLUMN user_id INTEGER REFERENCES users(id)")
+            await db.commit()
+
+        # Ensure index exists (safe even if column was just added)
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_signal_configs_user ON signal_configs (user_id)")
         await db.commit()

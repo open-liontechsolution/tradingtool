@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { apiFetch } from '../auth/apiFetch'
 
 const PAIRS = [
   'BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'XRPUSDT',
@@ -204,7 +205,7 @@ function ConfigForm({ strategies, onCreated }) {
           ? { leverage, invested_amount: null }
           : { invested_amount: investedAmount, leverage: null }),
       }
-      const res = await fetch('/api/signals/configs', {
+      const res = await apiFetch('/api/signals/configs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -532,7 +533,7 @@ function RealTradesSection() {
 
   const fetchRealTrades = useCallback(async () => {
     try {
-      const res = await fetch('/api/real-trades?limit=100')
+      const res = await apiFetch('/api/real-trades?limit=100')
       if (res.ok) {
         const data = await res.json()
         setRealTrades(data.real_trades ?? [])
@@ -556,7 +557,7 @@ function RealTradesSection() {
         notes: form.notes || null,
         sim_trade_id: form.sim_trade_id ? parseInt(form.sim_trade_id) : null,
       }
-      const res = await fetch('/api/real-trades', {
+      const res = await apiFetch('/api/real-trades', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -571,7 +572,7 @@ function RealTradesSection() {
   }
 
   const _handleClose = async (id, exitPrice, fees) => {
-    await fetch(`/api/real-trades/${id}`, {
+    await apiFetch(`/api/real-trades/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ exit_price: exitPrice, exit_time: new Date().toISOString(), status: 'closed', fees }),
@@ -698,7 +699,7 @@ function ComparisonView() {
     if (!simId) return
     setLoading(true)
     try {
-      const res = await fetch(`/api/comparison/${simId}`)
+      const res = await apiFetch(`/api/comparison/${simId}`)
       if (res.ok) {
         setData(await res.json())
       }
@@ -793,7 +794,7 @@ export default function SignalsPanel() {
 
   const fetchStrategies = useCallback(async () => {
     try {
-      const res = await fetch('/api/strategies')
+      const res = await apiFetch('/api/strategies')
       if (res.ok) {
         const data = await res.json()
         setStrategies(data.strategies ?? [])
@@ -803,7 +804,7 @@ export default function SignalsPanel() {
 
   const fetchConfigs = useCallback(async () => {
     try {
-      const res = await fetch('/api/signals/configs')
+      const res = await apiFetch('/api/signals/configs')
       if (res.ok) {
         const data = await res.json()
         setConfigs(data.configs ?? [])
@@ -813,7 +814,7 @@ export default function SignalsPanel() {
 
   const fetchSignals = useCallback(async () => {
     try {
-      const res = await fetch('/api/signals?limit=100')
+      const res = await apiFetch('/api/signals?limit=100')
       if (res.ok) {
         const data = await res.json()
         setSignals(data.signals ?? [])
@@ -823,7 +824,7 @@ export default function SignalsPanel() {
 
   const fetchSimTrades = useCallback(async () => {
     try {
-      const res = await fetch('/api/sim-trades?limit=100')
+      const res = await apiFetch('/api/sim-trades?limit=100')
       if (res.ok) {
         const data = await res.json()
         setSimTrades(data.sim_trades ?? [])
@@ -833,7 +834,7 @@ export default function SignalsPanel() {
 
   const fetchStatus = useCallback(async () => {
     try {
-      const res = await fetch('/api/signals/status')
+      const res = await apiFetch('/api/signals/status')
       if (res.ok) setStatus(await res.json())
     } catch { /* ignore */ }
   }, [])
@@ -854,7 +855,7 @@ export default function SignalsPanel() {
   }, [fetchStrategies, refreshAll])
 
   const handleToggle = async (id, active) => {
-    await fetch(`/api/signals/configs/${id}`, {
+    await apiFetch(`/api/signals/configs/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ active }),
@@ -863,12 +864,12 @@ export default function SignalsPanel() {
   }
 
   const handleDelete = async (id) => {
-    await fetch(`/api/signals/configs/${id}`, { method: 'DELETE' })
+    await apiFetch(`/api/signals/configs/${id}`, { method: 'DELETE' })
     refreshAll()
   }
 
   const handleCloseSimTrade = async (id) => {
-    await fetch(`/api/sim-trades/${id}/close`, { method: 'POST' })
+    await apiFetch(`/api/sim-trades/${id}/close`, { method: 'POST' })
     refreshAll()
   }
 

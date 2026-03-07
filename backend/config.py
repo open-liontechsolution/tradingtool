@@ -16,9 +16,20 @@ IS_POSTGRES: bool = bool(DATABASE_URL and DATABASE_URL.startswith("postgresql"))
 DB_PATH: Path = Path(os.environ.get("DB_PATH", "data/trading_tools.db"))
 
 # ---------------------------------------------------------------------------
+# Auth / Keycloak
+# ---------------------------------------------------------------------------
+
+AUTH_ENABLED: bool = os.environ.get("AUTH_ENABLED", "false").lower() in ("true", "1", "yes")
+
+KEYCLOAK_URL: str = os.environ.get("KEYCLOAK_URL", "")
+KEYCLOAK_REALM: str = os.environ.get("KEYCLOAK_REALM", "tradingtool-dev")
+KEYCLOAK_AUDIENCE: str = os.environ.get("KEYCLOAK_AUDIENCE", "tradingtool-api")
+
+# ---------------------------------------------------------------------------
 # App
 # ---------------------------------------------------------------------------
 
 PORT: int = int(os.environ.get("PORT", "8000"))
 HOST: str = os.environ.get("HOST", "0.0.0.0")
 LOG_LEVEL: str = os.environ.get("LOG_LEVEL", "info")
+CORS_ORIGINS: list[str] = [o.strip() for o in os.environ.get("CORS_ORIGINS", "*").split(",") if o.strip()]
