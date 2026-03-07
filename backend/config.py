@@ -32,8 +32,4 @@ KEYCLOAK_AUDIENCE: str = os.environ.get("KEYCLOAK_AUDIENCE", "tradingtool-api")
 PORT: int = int(os.environ.get("PORT", "8000"))
 HOST: str = os.environ.get("HOST", "0.0.0.0")
 LOG_LEVEL: str = os.environ.get("LOG_LEVEL", "info")
-CORS_ORIGINS: list[str] = [
-    o.strip()
-    for o in os.environ.get("CORS_ORIGINS", "*").split(",")
-    if o.strip()
-]
+CORS_ORIGINS: list[str] = [o.strip() for o in os.environ.get("CORS_ORIGINS", "*").split(",") if o.strip()]

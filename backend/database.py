@@ -321,13 +321,9 @@ async def init_db() -> None:
         cursor = await db.execute("PRAGMA table_info(signal_configs)")
         columns = {row[1] for row in await cursor.fetchall()}
         if "user_id" not in columns:
-            await db.execute(
-                "ALTER TABLE signal_configs ADD COLUMN user_id INTEGER REFERENCES users(id)"
-            )
+            await db.execute("ALTER TABLE signal_configs ADD COLUMN user_id INTEGER REFERENCES users(id)")
             await db.commit()
 
         # Ensure index exists (safe even if column was just added)
-        await db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_signal_configs_user ON signal_configs (user_id)"
-        )
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_signal_configs_user ON signal_configs (user_id)")
         await db.commit()
