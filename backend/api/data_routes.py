@@ -5,9 +5,10 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
+from backend.auth import require_admin
 from backend.binance_client import binance_client
 from backend.database import get_db
 from backend.download_engine import (
@@ -63,7 +64,7 @@ async def list_pairs() -> dict:
     return {"pairs": merged}
 
 
-@router.post("/download")
+@router.post("/download", dependencies=[Depends(require_admin)])
 async def start_download(req: DownloadRequest) -> dict:
     """Start a download job and return its ID."""
     if req.interval not in VALID_INTERVALS:
@@ -87,7 +88,7 @@ async def get_download_status(job_id: int) -> dict:
     return result
 
 
-@router.get("/download/{job_id}/cancel")
+@router.get("/download/{job_id}/cancel", dependencies=[Depends(require_admin)])
 async def cancel_download(job_id: int) -> dict:
     """Cancel a running or pending download job."""
     ok = await cancel_job(job_id)
@@ -129,7 +130,7 @@ async def get_rate_limit() -> dict:
     return binance_client.rate_limit.to_dict()
 
 
-@router.post("/metrics/compute")
+@router.post("/metrics/compute", dependencies=[Depends(require_admin)])
 async def compute_metrics_endpoint(req: MetricsRequest) -> dict:
     """Trigger derived metrics calculation for a symbol/interval."""
     result = await compute_and_store_metrics(

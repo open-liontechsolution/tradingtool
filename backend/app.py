@@ -18,7 +18,7 @@ from starlette.responses import Response
 from backend.api.backtest_routes import router as backtest_router
 from backend.api.data_routes import router as data_router
 from backend.api.signal_routes import router as signal_router
-from backend.auth import get_current_user, require_admin
+from backend.auth import get_current_user
 from backend.config import (
     AUTH_ENABLED,
     CORS_ORIGINS,
@@ -70,7 +70,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     return JSONResponse(status_code=422, content={"detail": exc.errors(), "body": body.decode()})
 
 
-app.include_router(data_router, prefix="/api", dependencies=[Depends(require_admin)])
+app.include_router(data_router, prefix="/api", dependencies=[Depends(get_current_user)])
 app.include_router(backtest_router, prefix="/api", dependencies=[Depends(get_current_user)])
 app.include_router(signal_router, prefix="/api", dependencies=[Depends(get_current_user)])
 
