@@ -165,14 +165,24 @@ async def _ensure_user(
                 roles=roles,
             )
 
-        # First login — create user
-        cursor = await db.execute(
-            """INSERT INTO users (keycloak_sub, email, username, roles, created_at, last_login_at)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (keycloak_sub, email, username, roles_json, now, now),
-        )
-        await db.commit()
-        new_id = cursor.lastrowid
+        # First login — create user (race-safe: another request may INSERT first)
+        try:
+            cursor = await db.execute(
+                """INSERT INTO users (keycloak_sub, email, username, roles, created_at, last_login_at)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (keycloak_sub, email, username, roles_json, now, now),
+            )
+            await db.commit()
+            new_id = cursor.lastrowid
+        except Exception:
+            # UNIQUE constraint violation — concurrent request already inserted
+            await db.commit()
+            cursor = await db.execute(
+                "SELECT id FROM users WHERE keycloak_sub = ?",
+                (keycloak_sub,),
+            )
+            row = await cursor.fetchone()
+            new_id = row[0] if isinstance(row, (list, tuple)) else row["id"]
 
     return AuthUser(
         id=new_id,

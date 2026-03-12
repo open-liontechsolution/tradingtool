@@ -19,7 +19,14 @@ from backend.api.backtest_routes import router as backtest_router
 from backend.api.data_routes import router as data_router
 from backend.api.signal_routes import router as signal_router
 from backend.auth import get_current_user, require_admin
-from backend.config import AUTH_ENABLED, CORS_ORIGINS, KEYCLOAK_FRONTEND_CLIENT_ID, KEYCLOAK_REALM, KEYCLOAK_URL
+from backend.config import (
+    AUTH_ENABLED,
+    CORS_ORIGINS,
+    KEYCLOAK_AUDIENCE,
+    KEYCLOAK_FRONTEND_CLIENT_ID,
+    KEYCLOAK_REALM,
+    KEYCLOAK_URL,
+)
 from backend.database import get_db, init_db
 from backend.live_tracker import run_live_tracker
 from backend.signal_engine import run_signal_scanner
@@ -77,6 +84,7 @@ async def auth_config() -> JSONResponse:
             "keycloak_url": KEYCLOAK_URL,
             "keycloak_realm": KEYCLOAK_REALM,
             "keycloak_client_id": KEYCLOAK_FRONTEND_CLIENT_ID,
+            "keycloak_audience": KEYCLOAK_AUDIENCE,
         }
     )
 
