@@ -18,13 +18,25 @@ const MOCK_USER = {
   },
 }
 
+function decodeJwtPayload(token) {
+  try {
+    const base64 = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')
+    return JSON.parse(atob(base64))
+  } catch {
+    return null
+  }
+}
+
 function extractRoles(user, audience = 'tradingtool-api') {
   try {
-    // Check client roles under resource_access first
-    const clientRoles = user?.profile?.resource_access?.[audience]?.roles ?? []
+    // Keycloak puts resource_access / realm_access in the ACCESS token,
+    // not the ID token. oidc-client-ts exposes user.profile from the ID
+    // token, so we must decode the access token to find roles.
+    const payload = user?.access_token ? decodeJwtPayload(user.access_token) : user?.profile
+    const clientRoles = payload?.resource_access?.[audience]?.roles ?? []
     if (clientRoles.length > 0) return clientRoles
     // Fallback to realm roles
-    return user?.profile?.realm_access?.roles ?? []
+    return payload?.realm_access?.roles ?? []
   } catch {
     return []
   }
