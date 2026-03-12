@@ -19,7 +19,7 @@ from backend.api.backtest_routes import router as backtest_router
 from backend.api.data_routes import router as data_router
 from backend.api.signal_routes import router as signal_router
 from backend.auth import get_current_user, require_admin
-from backend.config import CORS_ORIGINS
+from backend.config import AUTH_ENABLED, CORS_ORIGINS, KEYCLOAK_FRONTEND_CLIENT_ID, KEYCLOAK_REALM, KEYCLOAK_URL
 from backend.database import get_db, init_db
 from backend.live_tracker import run_live_tracker
 from backend.signal_engine import run_signal_scanner
@@ -66,6 +66,19 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 app.include_router(data_router, prefix="/api", dependencies=[Depends(require_admin)])
 app.include_router(backtest_router, prefix="/api", dependencies=[Depends(get_current_user)])
 app.include_router(signal_router, prefix="/api", dependencies=[Depends(get_current_user)])
+
+
+@app.get("/api/auth/config", tags=["auth"])
+async def auth_config() -> JSONResponse:
+    """Public endpoint returning frontend auth configuration (no auth required)."""
+    return JSONResponse(
+        content={
+            "auth_enabled": AUTH_ENABLED,
+            "keycloak_url": KEYCLOAK_URL,
+            "keycloak_realm": KEYCLOAK_REALM,
+            "keycloak_client_id": KEYCLOAK_FRONTEND_CLIENT_ID,
+        }
+    )
 
 
 @app.get("/healthz", tags=["health"])

@@ -28,6 +28,7 @@ config:
   KEYCLOAK_URL: ""
   KEYCLOAK_REALM: "tradingtool-dev"
   KEYCLOAK_AUDIENCE: "tradingtool-api"
+  KEYCLOAK_FRONTEND_CLIENT_ID: "tradingtool-web"
   CORS_ORIGINS: "*"
 
 resources:

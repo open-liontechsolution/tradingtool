@@ -1,31 +1,46 @@
 /**
- * OIDC / Keycloak configuration built from Vite environment variables.
+ * Auth configuration fetched at runtime from the backend.
  *
- * Env vars (set in .env.development.local or build-time):
- *   VITE_AUTH_ENABLED      – "true" to enable Keycloak login (default: "false")
- *   VITE_KEYCLOAK_URL      – Keycloak base URL
- *   VITE_KEYCLOAK_REALM    – Keycloak realm name (default: "tradingtool-dev")
- *   VITE_KEYCLOAK_CLIENT_ID – OIDC client ID (default: "tradingtool-web")
+ * The backend exposes GET /api/auth/config (no auth required) which returns
+ * the values of AUTH_ENABLED, KEYCLOAK_URL, KEYCLOAK_REALM and
+ * KEYCLOAK_FRONTEND_CLIENT_ID from its environment.
+ *
+ * VITE_* env vars are only used as fallbacks for local `npm run dev` without
+ * a running backend.
  */
 
-export const AUTH_ENABLED =
-  (import.meta.env.VITE_AUTH_ENABLED ?? 'false').toLowerCase() === 'true'
+/**
+ * Fetch auth config from the backend.
+ * Returns a plain object: { auth_enabled, keycloak_url, keycloak_realm, keycloak_client_id }
+ */
+export async function fetchAuthConfig() {
+  try {
+    const res = await fetch('/api/auth/config')
+    if (res.ok) {
+      return await res.json()
+    }
+  } catch {
+    // backend unreachable — fall through to VITE_ defaults (local dev)
+  }
 
-const KEYCLOAK_URL = import.meta.env.VITE_KEYCLOAK_URL ?? ''
-const KEYCLOAK_REALM = import.meta.env.VITE_KEYCLOAK_REALM ?? 'tradingtool-dev'
-const KEYCLOAK_CLIENT_ID =
-  import.meta.env.VITE_KEYCLOAK_CLIENT_ID ?? 'tradingtool-web'
+  return {
+    auth_enabled: (import.meta.env.VITE_AUTH_ENABLED ?? 'false').toLowerCase() === 'true',
+    keycloak_url: import.meta.env.VITE_KEYCLOAK_URL ?? '',
+    keycloak_realm: import.meta.env.VITE_KEYCLOAK_REALM ?? 'tradingtool-dev',
+    keycloak_client_id: import.meta.env.VITE_KEYCLOAK_CLIENT_ID ?? 'tradingtool-web',
+  }
+}
 
-const authority = `${KEYCLOAK_URL}/realms/${KEYCLOAK_REALM}`
-
-/** Settings object for oidc-client-ts UserManager */
-export const oidcConfig = {
-  authority,
-  client_id: KEYCLOAK_CLIENT_ID,
-  redirect_uri: `${window.location.origin}/`,
-  post_logout_redirect_uri: `${window.location.origin}/`,
-  response_type: 'code',
-  scope: 'openid profile email',
-  automaticSilentRenew: true,
-  // PKCE S256 is the default in oidc-client-ts for response_type=code
+/** Build an oidc-client-ts config object from a fetched auth config. */
+export function buildOidcConfig({ keycloak_url, keycloak_realm, keycloak_client_id }) {
+  const authority = `${keycloak_url}/realms/${keycloak_realm}`
+  return {
+    authority,
+    client_id: keycloak_client_id,
+    redirect_uri: `${window.location.origin}/`,
+    post_logout_redirect_uri: `${window.location.origin}/`,
+    response_type: 'code',
+    scope: 'openid profile email',
+    automaticSilentRenew: true,
+  }
 }
