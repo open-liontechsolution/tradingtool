@@ -18,9 +18,13 @@ const MOCK_USER = {
   },
 }
 
-function extractRoles(user) {
+function extractRoles(user, audience = 'tradingtool-api') {
   try {
-    return user?.profile?.resource_access?.['tradingtool-api']?.roles ?? []
+    // Check client roles under resource_access first
+    const clientRoles = user?.profile?.resource_access?.[audience]?.roles ?? []
+    if (clientRoles.length > 0) return clientRoles
+    // Fallback to realm roles
+    return user?.profile?.realm_access?.roles ?? []
   } catch {
     return []
   }
@@ -50,7 +54,7 @@ export function AuthProvider({ children }) {
     return <MockAuthProvider>{children}</MockAuthProvider>
   }
 
-  return <KeycloakAuthProvider oidcConfig={buildOidcConfig(cfg)}>{children}</KeycloakAuthProvider>
+  return <KeycloakAuthProvider oidcConfig={buildOidcConfig(cfg)} audience={cfg.keycloak_audience}>{children}</KeycloakAuthProvider>
 }
 
 // ---------------------------------------------------------------------------
@@ -83,7 +87,7 @@ function MockAuthProvider({ children }) {
 // Real Keycloak provider
 // ---------------------------------------------------------------------------
 
-function KeycloakAuthProvider({ oidcConfig, children }) {
+function KeycloakAuthProvider({ oidcConfig, audience, children }) {
   const [user, setUser] = useState(null)
   const [isLoading, setIsLoading] = useState(true)
   const mgr = useRef(null)
@@ -144,7 +148,7 @@ function KeycloakAuthProvider({ oidcConfig, children }) {
     mgr.current?.signoutRedirect()
   }, [])
 
-  const roles = extractRoles(user)
+  const roles = extractRoles(user, audience)
 
   const value = {
     user,
