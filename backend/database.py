@@ -41,12 +41,52 @@ def _to_pg_placeholders(query: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+class _Row:
+    """Row that supports both integer-index and string-key access.
+
+    This bridges the gap between aiosqlite (which returns sqlite3.Row objects
+    supporting ``row[0]`` and ``row['col']``) and asyncpg (which returns
+    Record objects that are converted to plain dicts losing index access).
+    Iteration yields *values* so ``zip(cols, row)`` works as expected.
+    """
+
+    __slots__ = ("_keys", "_values", "_map")
+
+    def __init__(self, mapping: dict) -> None:
+        self._keys = list(mapping.keys())
+        self._values = [mapping[k] for k in self._keys]
+        self._map = mapping
+
+    def __getitem__(self, key: Any) -> Any:
+        if isinstance(key, int):
+            return self._values[key]
+        return self._map[key]
+
+    def __iter__(self):
+        return iter(self._values)
+
+    def __len__(self):
+        return len(self._values)
+
+    def keys(self):
+        return self._keys
+
+    def values(self):
+        return self._values
+
+    def items(self):
+        return zip(self._keys, self._values, strict=False)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return self._map.get(key, default)
+
+
 class _PgConnection:
     """Thin wrapper around asyncpg Connection that mimics the aiosqlite API."""
 
     def __init__(self, conn: Any) -> None:
         self._conn = conn
-        self._rows: list[dict] | None = None
+        self._rows: list[_Row] | None = None
         self._last_id: int | None = None
 
     async def execute(self, query: str, params: tuple | list = ()) -> _PgCursor:
@@ -58,7 +98,7 @@ class _PgConnection:
             self._last_id = row["id"] if row else None
             return _PgCursor([], self._last_id)
         rows = await self._conn.fetch(pg_query, *params)
-        records = [dict(r) for r in rows]
+        records = [_Row(dict(r)) for r in rows]
         return _PgCursor(records, None)
 
     async def executemany(self, query: str, params_seq: list) -> None:
@@ -76,15 +116,15 @@ class _PgConnection:
 
 
 class _PgCursor:
-    def __init__(self, rows: list[dict], lastrowid: int | None) -> None:
+    def __init__(self, rows: list[_Row], lastrowid: int | None) -> None:
         self._rows = rows
         self.lastrowid = lastrowid
         self.description = [(k,) for k in (rows[0].keys() if rows else [])]
 
-    async def fetchall(self) -> list[dict]:
+    async def fetchall(self) -> list[_Row]:
         return self._rows
 
-    async def fetchone(self) -> dict | None:
+    async def fetchone(self) -> _Row | None:
         return self._rows[0] if self._rows else None
 
 
