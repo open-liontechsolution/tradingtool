@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { UserManager, WebStorageStateStore } from 'oidc-client-ts'
-import { AUTH_ENABLED, oidcConfig } from './authConfig'
+import { buildOidcConfig, fetchAuthConfig } from './authConfig'
 import { setAccessToken } from './apiFetch'
 import { AuthContext } from './AuthContext'
 
@@ -27,14 +27,30 @@ function extractRoles(user) {
 }
 
 // ---------------------------------------------------------------------------
-// Provider
+// Top-level provider: fetches runtime config then delegates
 // ---------------------------------------------------------------------------
 
 export function AuthProvider({ children }) {
-  if (!AUTH_ENABLED) {
+  const [cfg, setCfg] = useState(null) // null = still loading
+
+  useEffect(() => {
+    fetchAuthConfig().then(setCfg)
+  }, [])
+
+  if (cfg === null) {
+    // Loading runtime config — render nothing (App shows its own spinner)
+    return (
+      <AuthContext.Provider value={{ isLoading: true, isAuthenticated: false, roles: [], isAdmin: false, login: () => {}, logout: () => {} }}>
+        {children}
+      </AuthContext.Provider>
+    )
+  }
+
+  if (!cfg.auth_enabled) {
     return <MockAuthProvider>{children}</MockAuthProvider>
   }
-  return <KeycloakAuthProvider>{children}</KeycloakAuthProvider>
+
+  return <KeycloakAuthProvider oidcConfig={buildOidcConfig(cfg)}>{children}</KeycloakAuthProvider>
 }
 
 // ---------------------------------------------------------------------------
@@ -42,7 +58,6 @@ export function AuthProvider({ children }) {
 // ---------------------------------------------------------------------------
 
 function MockAuthProvider({ children }) {
-  // Keep token ref in sync so apiFetch works even in mock mode
   useEffect(() => {
     setAccessToken('mock-dev-token')
     return () => setAccessToken(null)
@@ -68,12 +83,11 @@ function MockAuthProvider({ children }) {
 // Real Keycloak provider
 // ---------------------------------------------------------------------------
 
-function KeycloakAuthProvider({ children }) {
+function KeycloakAuthProvider({ oidcConfig, children }) {
   const [user, setUser] = useState(null)
   const [isLoading, setIsLoading] = useState(true)
   const mgr = useRef(null)
 
-  // Initialise UserManager once
   useEffect(() => {
     const userManager = new UserManager({
       ...oidcConfig,
@@ -81,7 +95,6 @@ function KeycloakAuthProvider({ children }) {
     })
     mgr.current = userManager
 
-    // Keep access token synced
     const onUserLoaded = (u) => {
       setUser(u)
       setAccessToken(u?.access_token ?? null)
@@ -94,18 +107,14 @@ function KeycloakAuthProvider({ children }) {
     userManager.events.addUserLoaded(onUserLoaded)
     userManager.events.addUserUnloaded(onUserUnloaded)
 
-    // Attempt to complete a redirect callback, or load existing session
     const init = async () => {
       try {
-        // If the URL has ?code= we are returning from Keycloak
         if (window.location.search.includes('code=')) {
           const u = await userManager.signinRedirectCallback()
-          // Clean URL
           window.history.replaceState({}, document.title, window.location.pathname)
           setUser(u)
           setAccessToken(u?.access_token ?? null)
         } else {
-          // Try to get existing session
           const u = await userManager.getUser()
           if (u && !u.expired) {
             setUser(u)
@@ -125,7 +134,7 @@ function KeycloakAuthProvider({ children }) {
       userManager.events.removeUserLoaded(onUserLoaded)
       userManager.events.removeUserUnloaded(onUserUnloaded)
     }
-  }, [])
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const login = useCallback(() => {
     mgr.current?.signinRedirect()

@@ -24,6 +24,7 @@ AUTH_ENABLED: bool = os.environ.get("AUTH_ENABLED", "false").lower() in ("true",
 KEYCLOAK_URL: str = os.environ.get("KEYCLOAK_URL", "")
 KEYCLOAK_REALM: str = os.environ.get("KEYCLOAK_REALM", "tradingtool-dev")
 KEYCLOAK_AUDIENCE: str = os.environ.get("KEYCLOAK_AUDIENCE", "tradingtool-api")
+KEYCLOAK_FRONTEND_CLIENT_ID: str = os.environ.get("KEYCLOAK_FRONTEND_CLIENT_ID", "tradingtool-web")
 
 # ---------------------------------------------------------------------------
 # App
