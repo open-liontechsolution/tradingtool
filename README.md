@@ -65,6 +65,7 @@ Variables de entorno relevantes:
   - Si empieza por `postgresql://`, se usa PostgreSQL (schema vía Alembic).
 - `DB_PATH` (solo SQLite): ruta del archivo DB (default: `data/trading_tools.db`).
 - `HOST` (default `0.0.0.0`), `PORT` (default `8000`), `LOG_LEVEL` (default `info`).
+- `CORS_ORIGINS` (default `*`, lista separada por comas).
 
 ### Auth backend (FastAPI)
 
@@ -154,7 +155,9 @@ Si `frontend/dist` existe, FastAPI lo monta en `/` automáticamente.
 
 ## Endpoints principales
 
-### Datos
+### Datos (admin)
+
+> Requieren rol `app_admin`.
 
 - `GET /api/pairs`
 - `POST /api/download`
@@ -166,14 +169,18 @@ Si `frontend/dist` existe, FastAPI lo monta en `/` automáticamente.
 - `GET /api/coverage`
 - `GET /api/metrics/status`
 
-### Backtesting
+### Backtesting (usuario autenticado)
+
+> Requieren usuario autenticado.
 
 - `GET /api/strategies`
 - `POST /api/backtest`
 - `GET /api/backtest/{backtest_id}`
 - `GET /api/backtest/{backtest_id}/export?format=json|csv`
 
-### Signals / Tracking
+### Signals / Tracking (usuario autenticado)
+
+> Requieren usuario autenticado. Las consultas y mutaciones se acotan al usuario actual.
 
 - `POST /api/signals/configs`
 - `GET /api/signals/configs`
