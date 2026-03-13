@@ -11,6 +11,7 @@ from typing import Any
 import aiosqlite
 
 from backend.binance_client import binance_client, parse_candle, validate_candle
+from backend.config import IS_POSTGRES
 from backend.database import get_db
 
 logger = logging.getLogger(__name__)
@@ -72,11 +73,57 @@ async def _get_existing_open_times(
     return {row[0] for row in rows}
 
 
+_KLINE_COLS = [
+    "symbol",
+    "interval",
+    "open_time",
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+    "close_time",
+    "quote_asset_volume",
+    "number_of_trades",
+    "taker_buy_base_vol",
+    "taker_buy_quote_vol",
+    "ignore_field",
+    "source",
+    "downloaded_at",
+]
+
+_KLINE_UPDATE_COLS = [
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+    "close_time",
+    "quote_asset_volume",
+    "number_of_trades",
+    "taker_buy_base_vol",
+    "taker_buy_quote_vol",
+    "ignore_field",
+    "source",
+    "downloaded_at",
+]
+
+
 async def _upsert_candles(db: aiosqlite.Connection, candles: list[dict]) -> int:
     if not candles:
         return 0
-    await db.executemany(
-        """
+
+    if IS_POSTGRES:
+        cols = ", ".join(_KLINE_COLS)
+        placeholders = ", ".join("?" for _ in _KLINE_COLS)
+        conflict_set = ", ".join(f"{c} = EXCLUDED.{c}" for c in _KLINE_UPDATE_COLS)
+        query = (
+            f"INSERT INTO klines ({cols}) VALUES ({placeholders}) "
+            f"ON CONFLICT (symbol, interval, open_time) DO UPDATE SET {conflict_set}"
+        )
+        params_seq = [tuple(c[col] for col in _KLINE_COLS) for c in candles]
+    else:
+        query = """
         INSERT OR REPLACE INTO klines
             (symbol, interval, open_time, open, high, low, close, volume,
              close_time, quote_asset_volume, number_of_trades,
@@ -87,9 +134,10 @@ async def _upsert_candles(db: aiosqlite.Connection, candles: list[dict]) -> int:
              :close_time, :quote_asset_volume, :number_of_trades,
              :taker_buy_base_vol, :taker_buy_quote_vol, :ignore_field,
              :source, :downloaded_at)
-        """,
-        candles,
-    )
+        """
+        params_seq = candles
+
+    await db.executemany(query, params_seq)
     await db.commit()
     return len(candles)
 

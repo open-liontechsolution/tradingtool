@@ -8,6 +8,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from backend.config import IS_POSTGRES
 from backend.database import get_db
 
 logger = logging.getLogger(__name__)
@@ -52,11 +53,21 @@ async def _upsert_metrics(
     """Bulk upsert (open_time, metric_name, value) tuples."""
     if not records:
         return
-    await db.executemany(
-        """
+
+    if IS_POSTGRES:
+        query = (
+            "INSERT INTO derived_metrics (symbol, interval, open_time, metric_name, value) "
+            "VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT (symbol, interval, open_time, metric_name) DO UPDATE SET value = EXCLUDED.value"
+        )
+    else:
+        query = """
         INSERT OR REPLACE INTO derived_metrics (symbol, interval, open_time, metric_name, value)
         VALUES (?, ?, ?, ?, ?)
-        """,
+        """
+
+    await db.executemany(
+        query,
         [(symbol, interval, ot, name, val) for ot, name, val in records],
     )
     await db.commit()
