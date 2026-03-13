@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
 import { apiFetch } from '../auth/apiFetch'
 
 const PAIRS = [
@@ -530,6 +530,8 @@ function RealTradesSection() {
     sim_trade_id: '', symbol: '', side: 'long', entry_price: '', entry_time: '', quantity: '', fees: '0', notes: '',
   })
   const [loading, setLoading] = useState(false)
+  const [closingId, setClosingId] = useState(null)
+  const [closeForm, setCloseForm] = useState({ exit_price: '', pnl: '', exit_time: '', notes: '' })
 
   const fetchRealTrades = useCallback(async () => {
     try {
@@ -571,13 +573,45 @@ function RealTradesSection() {
     setLoading(false)
   }
 
-  const _handleClose = async (id, exitPrice, fees) => {
-    await apiFetch(`/api/real-trades/${id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ exit_price: exitPrice, exit_time: new Date().toISOString(), status: 'closed', fees }),
-    })
-    fetchRealTrades()
+  const computeFees = (trade) => {
+    const exitPrice = parseFloat(closeForm.exit_price)
+    const netPnl = parseFloat(closeForm.pnl)
+    if (isNaN(exitPrice) || isNaN(netPnl)) return null
+    const qty = parseFloat(trade.quantity)
+    const entry = parseFloat(trade.entry_price)
+    const grossPnl = trade.side === 'long' ? qty * (exitPrice - entry) : qty * (entry - exitPrice)
+    return Math.max(0, grossPnl - netPnl)
+  }
+
+  const handleClose = async (trade) => {
+    setLoading(true)
+    try {
+      const fees = computeFees(trade)
+      const body = {
+        exit_price: parseFloat(closeForm.exit_price),
+        exit_time: closeForm.exit_time || new Date().toISOString(),
+        pnl: parseFloat(closeForm.pnl),
+        fees: fees ?? 0,
+        status: 'closed',
+      }
+      if (closeForm.notes) body.notes = closeForm.notes
+      const res = await apiFetch(`/api/real-trades/${trade.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      if (res.ok) {
+        setClosingId(null)
+        setCloseForm({ exit_price: '', pnl: '', exit_time: '', notes: '' })
+        fetchRealTrades()
+      }
+    } catch { /* ignore */ }
+    setLoading(false)
+  }
+
+  const openCloseForm = (trade) => {
+    setClosingId(trade.id)
+    setCloseForm({ exit_price: '', pnl: '', exit_time: '', notes: '' })
   }
 
   return (
@@ -657,13 +691,15 @@ function RealTradesSection() {
                 <th>Fees</th>
                 <th>Status</th>
                 <th>Notes</th>
+                <th>Actions</th>
               </tr>
             </thead>
             <tbody>
               {realTrades.map(t => {
                 const pnlColor = t.pnl > 0 ? 'var(--color-success)' : t.pnl < 0 ? 'var(--color-danger)' : 'var(--text-secondary)'
                 return (
-                  <tr key={t.id}>
+                  <React.Fragment key={t.id}>
+                  <tr>
                     <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}>{t.id}</td>
                     <td>{t.sim_trade_id || '—'}</td>
                     <td>{t.symbol}</td>
@@ -678,7 +714,67 @@ function RealTradesSection() {
                     <td style={{ fontSize: '0.8rem', maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {t.notes || '—'}
                     </td>
+                    <td>
+                      {t.status === 'open' && closingId !== t.id && (
+                        <button className="btn btn-sm" onClick={() => openCloseForm(t)}
+                          style={{ background: 'var(--color-warning)', color: '#000', fontSize: '0.75rem', padding: '2px 8px' }}>
+                          Close
+                        </button>
+                      )}
+                      {closingId === t.id && (
+                        <button className="btn btn-sm btn-secondary" onClick={() => setClosingId(null)}
+                          style={{ fontSize: '0.75rem', padding: '2px 8px' }}>
+                          Cancel
+                        </button>
+                      )}
+                    </td>
                   </tr>
+                  {closingId === t.id && (() => {
+                    const fees = computeFees(t)
+                    return (
+                      <tr key={`close-${t.id}`} style={{ background: 'var(--bg-elevated)' }}>
+                        <td colSpan={11} style={{ padding: 'var(--space-3)' }}>
+                          <div style={{ display: 'flex', gap: 'var(--space-3)', alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                            <div className="form-group" style={{ marginBottom: 0 }}>
+                              <label className="form-label" style={{ fontSize: '0.75rem' }}>Exit Price *</label>
+                              <input type="number" className="form-control" step="0.01" style={{ width: 130 }}
+                                value={closeForm.exit_price}
+                                onChange={e => setCloseForm(prev => ({ ...prev, exit_price: e.target.value }))} />
+                            </div>
+                            <div className="form-group" style={{ marginBottom: 0 }}>
+                              <label className="form-label" style={{ fontSize: '0.75rem' }}>Net PnL *</label>
+                              <input type="number" className="form-control" step="0.01" style={{ width: 130 }}
+                                value={closeForm.pnl}
+                                onChange={e => setCloseForm(prev => ({ ...prev, pnl: e.target.value }))} />
+                            </div>
+                            <div className="form-group" style={{ marginBottom: 0 }}>
+                              <label className="form-label" style={{ fontSize: '0.75rem' }}>Fees (auto)</label>
+                              <input type="text" className="form-control" readOnly style={{ width: 100, opacity: 0.7 }}
+                                value={fees != null ? fees.toFixed(2) : '—'} />
+                            </div>
+                            <div className="form-group" style={{ marginBottom: 0 }}>
+                              <label className="form-label" style={{ fontSize: '0.75rem' }}>Exit Time</label>
+                              <input type="datetime-local" className="form-control" style={{ width: 190 }}
+                                value={closeForm.exit_time}
+                                onChange={e => setCloseForm(prev => ({ ...prev, exit_time: e.target.value }))} />
+                            </div>
+                            <div className="form-group" style={{ marginBottom: 0 }}>
+                              <label className="form-label" style={{ fontSize: '0.75rem' }}>Notes</label>
+                              <input type="text" className="form-control" style={{ width: 160 }}
+                                value={closeForm.notes} placeholder="Optional"
+                                onChange={e => setCloseForm(prev => ({ ...prev, notes: e.target.value }))} />
+                            </div>
+                            <button className="btn btn-sm btn-primary" onClick={() => handleClose(t)}
+                              disabled={loading || !closeForm.exit_price || !closeForm.pnl}
+                              style={{ fontSize: '0.75rem' }}>
+                              Confirm Close
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    )
+                  })()}
+                  </React.Fragment>
                 )
               })}
             </tbody>
