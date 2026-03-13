@@ -22,6 +22,7 @@ from backend.auth import get_current_user
 from backend.config import (
     AUTH_ENABLED,
     CORS_ORIGINS,
+    IS_POSTGRES,
     KEYCLOAK_AUDIENCE,
     KEYCLOAK_FRONTEND_CLIENT_ID,
     KEYCLOAK_REALM,
@@ -36,6 +37,7 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    logger.info("Database backend: %s", "PostgreSQL" if IS_POSTGRES else "SQLite (ephemeral)")
     await init_db()
     scanner_task = asyncio.create_task(run_signal_scanner())
     tracker_task = asyncio.create_task(run_live_tracker())
