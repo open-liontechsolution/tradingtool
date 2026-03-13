@@ -175,17 +175,14 @@ async def get_db():
             yield db
 
 
-def _run_alembic_upgrade() -> None:
-    """Run ``alembic upgrade head`` programmatically (synchronous)."""
+def _run_alembic_upgrade_sync() -> None:
+    """Run ``alembic upgrade head`` in a **fresh** event loop (must be called outside asyncio)."""
     from alembic.config import Config  # noqa: PLC0415
 
     from alembic import command  # noqa: PLC0415
 
-    log = logging.getLogger(__name__)
-    log.info("Running Alembic migrations (upgrade head) ...")
     cfg = Config("alembic.ini")
     command.upgrade(cfg, "head")
-    log.info("Alembic migrations complete.")
 
 
 async def init_db() -> None:
@@ -196,7 +193,12 @@ async def init_db() -> None:
     - **SQLite**: creates all tables inline (no Alembic).
     """
     if IS_POSTGRES:
-        _run_alembic_upgrade()
+        import asyncio  # noqa: PLC0415
+
+        log = logging.getLogger(__name__)
+        log.info("Running Alembic migrations (upgrade head) ...")
+        await asyncio.to_thread(_run_alembic_upgrade_sync)
+        log.info("Alembic migrations complete.")
         return
 
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
