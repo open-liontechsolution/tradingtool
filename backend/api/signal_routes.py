@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -310,11 +310,12 @@ async def signals_status(user: AuthUser = Depends(get_current_user)) -> dict:
         )
         pending_trades = (await cursor.fetchone())[0]
 
+        cutoff_24h = (datetime.now(UTC) - timedelta(hours=24)).isoformat()
         cursor = await db.execute(
             """SELECT COUNT(*) FROM signals s
                JOIN signal_configs sc ON s.config_id = sc.id
-               WHERE s.created_at > datetime('now', '-24 hours') AND sc.user_id = ?""",
-            (user.id,),
+               WHERE s.created_at > ? AND sc.user_id = ?""",
+            (cutoff_24h, user.id),
         )
         recent_signals = (await cursor.fetchone())[0]
 
