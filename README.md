@@ -4,6 +4,22 @@ Plataforma full-stack para **descargar datos históricos de Binance Spot**, alma
 
 ## Qué incluye actualmente
 
+### Novedades recientes (auth + scoping)
+
+- **Sistema de autenticación listo para Keycloak** con dos modos:
+  - **Modo mock/local (default)**: login automático de un usuario de desarrollo.
+  - **Modo real**: validación de JWT por JWKS y roles por cliente OIDC.
+- **Scoping por usuario** para señales:
+  - `signal_configs` ahora guarda `user_id`.
+  - Se añadió tabla `users` con auto-provisionado al primer login real.
+- **Autorización por rol en API**:
+  - Endpoints de **Data Manager** requieren rol admin.
+  - Endpoints de **Backtesting** y **Signals** requieren usuario autenticado.
+- **Frontend con proveedor de auth**:
+  - Integración OIDC (`oidc-client-ts`) para Keycloak.
+  - Pantalla de login cuando `AUTH_ENABLED=true`.
+  - Sesión mock cuando `AUTH_ENABLED=false`.
+
 - **Backend (FastAPI)** con API REST para:
   - Descarga asíncrona de velas históricas y seguimiento de progreso.
   - Consulta de velas y cobertura almacenada.
@@ -31,6 +47,7 @@ Plataforma full-stack para **descargar datos históricos de Binance Spot**, alma
 - `backend/signal_engine.py`: evaluación de estrategias para emitir señales.
 - `backend/live_tracker.py`: seguimiento de señales/sim trades abiertos.
 - `backend/database.py`: capa de acceso unificada para SQLite y PostgreSQL.
+- `backend/auth.py`: autenticación/autorización (modo mock + validación JWT Keycloak).
 - `frontend/`: SPA React con Vite y proxy `/api -> http://localhost:8000` en desarrollo.
 
 ## Requisitos
@@ -48,6 +65,54 @@ Variables de entorno relevantes:
   - Si empieza por `postgresql://`, se usa PostgreSQL (schema vía Alembic).
 - `DB_PATH` (solo SQLite): ruta del archivo DB (default: `data/trading_tools.db`).
 - `HOST` (default `0.0.0.0`), `PORT` (default `8000`), `LOG_LEVEL` (default `info`).
+- `CORS_ORIGINS` (default `*`, lista separada por comas).
+
+### Auth backend (FastAPI)
+
+- `AUTH_ENABLED`:
+  - `false` (default) => modo local/mock.
+  - `true` => activa validación de JWT y control de acceso real.
+- `KEYCLOAK_URL` (ej: `https://auth.midominio.com`)
+- `KEYCLOAK_REALM` (default `tradingtool-dev`)
+- `KEYCLOAK_AUDIENCE` (default `tradingtool-api`)
+
+### Auth frontend (Vite)
+
+- `VITE_AUTH_ENABLED` (default `false`)
+- `VITE_KEYCLOAK_URL`
+- `VITE_KEYCLOAK_REALM` (default `tradingtool-dev`)
+- `VITE_KEYCLOAK_CLIENT_ID` (default `tradingtool-web`)
+
+> Importante: para usar auth real, activa backend y frontend a la vez (`AUTH_ENABLED=true` y `VITE_AUTH_ENABLED=true`).
+
+## Modo single-user con login mock (desarrollo local)
+
+Para correr la app como **single-user sin Keycloak**, usa la configuración por defecto:
+
+- Backend: `AUTH_ENABLED=false`
+- Frontend: `VITE_AUTH_ENABLED=false`
+
+Con esto:
+
+- No se requiere servidor de identidad.
+- Se inyecta un usuario mock (`dev-local-user`) con roles `app_user` + `app_admin`.
+- Puedes acceder a todos los módulos desde local sin flujo de login real.
+
+Este modo está pensado para desarrollo/QA rápido en entorno local, no para producción.
+
+## Modo auth real (Keycloak)
+
+Cuando quieras validar acceso real:
+
+1. Configura variables de entorno de backend y frontend.
+2. Activa ambos flags (`AUTH_ENABLED=true`, `VITE_AUTH_ENABLED=true`).
+3. Inicia sesión desde la pantalla "Sign in" del frontend.
+
+Al autenticar:
+
+- El backend valida firma/issuer/exp del token.
+- Se crean/actualizan datos del usuario en la tabla `users`.
+- Las configuraciones de señales quedan asociadas al usuario autenticado.
 
 ## Puesta en marcha local
 
@@ -90,7 +155,9 @@ Si `frontend/dist` existe, FastAPI lo monta en `/` automáticamente.
 
 ## Endpoints principales
 
-### Datos
+### Datos (admin)
+
+> Requieren rol `app_admin`.
 
 - `GET /api/pairs`
 - `POST /api/download`
@@ -102,14 +169,18 @@ Si `frontend/dist` existe, FastAPI lo monta en `/` automáticamente.
 - `GET /api/coverage`
 - `GET /api/metrics/status`
 
-### Backtesting
+### Backtesting (usuario autenticado)
+
+> Requieren usuario autenticado.
 
 - `GET /api/strategies`
 - `POST /api/backtest`
 - `GET /api/backtest/{backtest_id}`
 - `GET /api/backtest/{backtest_id}/export?format=json|csv`
 
-### Signals / Tracking
+### Signals / Tracking (usuario autenticado)
+
+> Requieren usuario autenticado. Las consultas y mutaciones se acotan al usuario actual.
 
 - `POST /api/signals/configs`
 - `GET /api/signals/configs`
@@ -185,7 +256,4 @@ requirements.txt
 ## Próximas mejoras sugeridas
 
 - Persistir resultados de backtests en DB (hoy viven en memoria por `backtest_id`).
-- Añadir autenticación/autorización para entornos multiusuario.
-- Incorporar CI (lint + tests + build frontend) y badges.
 - Añadir Docker Compose para entorno reproducible (app + DB + frontend build).
-
