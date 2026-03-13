@@ -9,7 +9,8 @@ from pathlib import Path
 # Database
 # ---------------------------------------------------------------------------
 
-DATABASE_URL: str | None = os.environ.get("DATABASE_URL")
+_raw_db_url: str | None = os.environ.get("DATABASE_URL")
+DATABASE_URL: str | None = _raw_db_url.strip().strip("'\"") if _raw_db_url else None
 
 IS_POSTGRES: bool = bool(DATABASE_URL and DATABASE_URL.startswith("postgresql"))
 

@@ -10,6 +10,7 @@ SQLite init_db() creates the schema on first run; PostgreSQL relies on Alembic m
 
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -174,13 +175,28 @@ async def get_db():
             yield db
 
 
-async def init_db() -> None:
-    """Create all tables for SQLite local development.
+def _run_alembic_upgrade() -> None:
+    """Run ``alembic upgrade head`` programmatically (synchronous)."""
+    from alembic.config import Config  # noqa: PLC0415
 
-    For PostgreSQL the schema is managed by Alembic migrations — this function
-    is a no-op when DATABASE_URL points to PostgreSQL.
+    from alembic import command  # noqa: PLC0415
+
+    log = logging.getLogger(__name__)
+    log.info("Running Alembic migrations (upgrade head) ...")
+    cfg = Config("alembic.ini")
+    command.upgrade(cfg, "head")
+    log.info("Alembic migrations complete.")
+
+
+async def init_db() -> None:
+    """Initialise the database.
+
+    - **PostgreSQL**: runs Alembic ``upgrade head`` so migrations are applied
+      automatically on every deployment.
+    - **SQLite**: creates all tables inline (no Alembic).
     """
     if IS_POSTGRES:
+        _run_alembic_upgrade()
         return
 
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
