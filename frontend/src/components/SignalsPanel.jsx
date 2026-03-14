@@ -349,32 +349,32 @@ function ConfigsList({ configs, onToggle, onDelete }) {
 
   return (
     <div style={{ overflowX: 'auto' }}>
-      <table className="trade-table" style={{ width: '100%' }}>
+      <table className="trade-table">
         <thead>
           <tr>
-            <th>ID</th>
+            <th className="ta-right">ID</th>
             <th>Pair</th>
             <th>Interval</th>
             <th>Strategy</th>
-            <th>Portfolio</th>
-            <th>Stop Cross %</th>
-            <th>Active</th>
-            <th>Actions</th>
+            <th className="ta-right">Portfolio</th>
+            <th className="ta-right">Stop Cross %</th>
+            <th className="ta-center">Active</th>
+            <th className="ta-center">Actions</th>
           </tr>
         </thead>
         <tbody>
           {configs.map(c => (
             <tr key={c.id}>
-              <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}>{c.id}</td>
+              <td className="ta-right num-col" style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}>{c.id}</td>
               <td>{c.symbol}</td>
               <td>{c.interval}</td>
               <td>{c.strategy}</td>
-              <td>{fmtMoney(c.portfolio)}</td>
-              <td>{fmtNum(c.stop_cross_pct * 100, 1)}%</td>
-              <td>
+              <td className="ta-right num-col">{fmtMoney(c.portfolio)}</td>
+              <td className="ta-right num-col">{fmtNum(c.stop_cross_pct * 100, 1)}%</td>
+              <td className="ta-center">
                 <ToggleSwitch checked={c.active} onChange={(val) => onToggle(c.id, val)} />
               </td>
-              <td>
+              <td className="ta-center">
                 <button className="btn btn-sm btn-secondary" style={{ color: 'var(--color-danger)' }}
                   onClick={() => { if (confirm('Delete this config? Open trades will be closed.')) onDelete(c.id) }}>
                   Delete
@@ -408,19 +408,19 @@ function SignalsList({ signals }) {
       </div>
 
       <div style={{ overflowX: 'auto' }}>
-        <table className="trade-table" style={{ width: '100%' }}>
+        <table className="trade-table">
           <thead>
             <tr>
-              <th>ID</th>
+              <th className="ta-right">ID</th>
               <th>Config</th>
               <th>Symbol</th>
               <th>Side</th>
               <th>Signal Candle</th>
-              <th title="Open price of the next candle — use this as your entry on the exchange">Entry (next open) ↗</th>
-              <th title="Strategy stop-loss level — set this as your SL on the exchange">Stop Base (SL) 🛑</th>
-              <th title="Auto-close trigger = Stop Base ± stop_cross_pct. The system closes the SimTrade here automatically.">Auto-close trigger</th>
+              <th className="ta-right" title="Open price of the next candle — use this as your entry on the exchange">Entry (next open) ↗</th>
+              <th className="ta-right" title="Strategy stop-loss level — set this as your SL on the exchange">Stop Base (SL) 🛑</th>
+              <th className="ta-right" title="Auto-close trigger = Stop Base ± stop_cross_pct. The system closes the SimTrade here automatically.">Auto-close trigger</th>
               <th>Status</th>
-              <th>Sim Trade</th>
+              <th className="ta-center">Sim Trade</th>
               <th>Created</th>
             </tr>
           </thead>
@@ -433,7 +433,7 @@ function SignalsList({ signals }) {
                 : null
               return (
                 <tr key={s.id}>
-                  <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}>{s.id}</td>
+                  <td className="ta-right num-col" style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}>{s.id}</td>
                   <td>
                     <ConfigBadge configId={s.config_id} strategy={s.strategy} params={s.config_params} />
                   </td>
@@ -441,14 +441,14 @@ function SignalsList({ signals }) {
                   <td style={{ color: s.side === 'long' ? 'var(--color-success)' : 'var(--color-danger)', fontWeight: 700 }}>
                     {s.side?.toUpperCase()}
                   </td>
-                  <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.78rem' }}>{fmtTime(s.trigger_candle_time)}</td>
-                  <td style={{ color: entryColor, fontWeight: hasEntry ? 600 : 400 }}>
+                  <td className="num-col" style={{ fontFamily: 'var(--font-mono)', fontSize: '0.78rem' }}>{fmtTime(s.trigger_candle_time)}</td>
+                  <td className="ta-right num-col" style={{ color: entryColor, fontWeight: hasEntry ? 600 : 400 }}>
                     {hasEntry ? fmtNum(s.entry_price, 4) : 'Pending…'}
                   </td>
-                  <td style={{ fontFamily: 'var(--font-mono)' }}>{fmtNum(s.stop_price, 4)}</td>
-                  <td style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-muted)' }}>{fmtNum(s.stop_trigger_price, 4)}</td>
+                  <td className="ta-right num-col" style={{ fontFamily: 'var(--font-mono)' }}>{fmtNum(s.stop_price, 4)}</td>
+                  <td className="ta-right num-col" style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-muted)' }}>{fmtNum(s.stop_trigger_price, 4)}</td>
                   <td><StatusBadge status={s.status} /></td>
-                  <td style={{ fontSize: '0.78rem' }}>
+                  <td className="ta-center" style={{ fontSize: '0.78rem' }}>
                     {s.sim_trade_id
                       ? <span>#{s.sim_trade_id}{simStatusLabel ? <span style={{ marginLeft: 4, color: 'var(--text-muted)' }}>({simStatusLabel})</span> : null}</span>
                       : '—'}
@@ -471,21 +471,21 @@ function SimTradesList({ trades, onClose }) {
   }
   return (
     <div style={{ overflowX: 'auto' }}>
-      <table className="trade-table" style={{ width: '100%' }}>
+      <table className="trade-table">
         <thead>
           <tr>
-            <th>ID</th>
+            <th className="ta-right">ID</th>
             <th>Config</th>
             <th>Symbol</th>
             <th>Side</th>
-            <th>Entry</th>
-            <th>Stop Trigger</th>
-            <th>Exit</th>
+            <th className="ta-right">Entry</th>
+            <th className="ta-right">Stop Trigger</th>
+            <th className="ta-right">Exit</th>
             <th>Reason</th>
-            <th>PnL</th>
-            <th>PnL %</th>
+            <th className="ta-right">PnL</th>
+            <th className="ta-right">PnL %</th>
             <th>Status</th>
-            <th>Actions</th>
+            <th className="ta-center">Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -493,7 +493,7 @@ function SimTradesList({ trades, onClose }) {
             const pnlColor = t.pnl > 0 ? 'var(--color-success)' : t.pnl < 0 ? 'var(--color-danger)' : 'var(--text-secondary)'
             return (
               <tr key={t.id}>
-                <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}>{t.id}</td>
+                <td className="ta-right num-col" style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}>{t.id}</td>
                 <td>
                   <ConfigBadge configId={t.config_id} strategy={t.config_strategy} params={t.config_params} />
                 </td>
@@ -501,14 +501,14 @@ function SimTradesList({ trades, onClose }) {
                 <td style={{ color: t.side === 'long' ? 'var(--color-success)' : 'var(--color-danger)', fontWeight: 600 }}>
                   {t.side?.toUpperCase()}
                 </td>
-                <td>{t.entry_price ? fmtNum(t.entry_price, 4) : '—'}</td>
-                <td>{fmtNum(t.stop_trigger, 4)}</td>
-                <td>{t.exit_price ? fmtNum(t.exit_price, 4) : '—'}</td>
+                <td className="ta-right num-col">{t.entry_price ? fmtNum(t.entry_price, 4) : '—'}</td>
+                <td className="ta-right num-col">{fmtNum(t.stop_trigger, 4)}</td>
+                <td className="ta-right num-col">{t.exit_price ? fmtNum(t.exit_price, 4) : '—'}</td>
                 <td>{t.exit_reason || '—'}</td>
-                <td style={{ color: pnlColor, fontWeight: 600 }}>{t.pnl != null ? fmtMoney(t.pnl) : '—'}</td>
-                <td style={{ color: pnlColor }}>{t.pnl_pct != null ? fmtNum(t.pnl_pct * 100, 2) + '%' : '—'}</td>
+                <td className="ta-right num-col" style={{ color: pnlColor, fontWeight: 600 }}>{t.pnl != null ? fmtMoney(t.pnl) : '—'}</td>
+                <td className="ta-right num-col" style={{ color: pnlColor }}>{t.pnl_pct != null ? fmtNum(t.pnl_pct * 100, 2) + '%' : '—'}</td>
                 <td><StatusBadge status={t.status} /></td>
-                <td>
+                <td className="ta-center">
                   {t.status === 'open' && (
                     <button className="btn btn-sm btn-secondary" onClick={() => onClose(t.id)}>Close</button>
                   )}
@@ -678,20 +678,20 @@ function RealTradesSection() {
         <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>No real trades registered.</div>
       ) : (
         <div style={{ overflowX: 'auto' }}>
-          <table className="trade-table" style={{ width: '100%' }}>
+          <table className="trade-table">
             <thead>
               <tr>
-                <th>ID</th>
-                <th>Sim #</th>
+                <th className="ta-right">ID</th>
+                <th className="ta-right">Sim #</th>
                 <th>Symbol</th>
                 <th>Side</th>
-                <th>Entry</th>
-                <th>Exit</th>
-                <th>PnL</th>
-                <th>Fees</th>
+                <th className="ta-right">Entry</th>
+                <th className="ta-right">Exit</th>
+                <th className="ta-right">PnL</th>
+                <th className="ta-right">Fees</th>
                 <th>Status</th>
                 <th>Notes</th>
-                <th>Actions</th>
+                <th className="ta-center">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -700,21 +700,21 @@ function RealTradesSection() {
                 return (
                   <React.Fragment key={t.id}>
                   <tr>
-                    <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}>{t.id}</td>
-                    <td>{t.sim_trade_id || '—'}</td>
+                    <td className="ta-right num-col" style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}>{t.id}</td>
+                    <td className="ta-right num-col">{t.sim_trade_id || '—'}</td>
                     <td>{t.symbol}</td>
                     <td style={{ color: t.side === 'long' ? 'var(--color-success)' : 'var(--color-danger)', fontWeight: 600 }}>
                       {t.side?.toUpperCase()}
                     </td>
-                    <td>{fmtNum(t.entry_price, 4)}</td>
-                    <td>{t.exit_price ? fmtNum(t.exit_price, 4) : '—'}</td>
-                    <td style={{ color: pnlColor, fontWeight: 600 }}>{t.pnl != null ? fmtMoney(t.pnl) : '—'}</td>
-                    <td>{fmtNum(t.fees, 2)}</td>
+                    <td className="ta-right num-col">{fmtNum(t.entry_price, 4)}</td>
+                    <td className="ta-right num-col">{t.exit_price ? fmtNum(t.exit_price, 4) : '—'}</td>
+                    <td className="ta-right num-col" style={{ color: pnlColor, fontWeight: 600 }}>{t.pnl != null ? fmtMoney(t.pnl) : '—'}</td>
+                    <td className="ta-right num-col">{fmtNum(t.fees, 2)}</td>
                     <td><StatusBadge status={t.status} /></td>
                     <td style={{ fontSize: '0.8rem', maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {t.notes || '—'}
                     </td>
-                    <td>
+                    <td className="ta-center">
                       {t.status === 'open' && closingId !== t.id && (
                         <button className="btn btn-sm" onClick={() => openCloseForm(t)}
                           style={{ background: 'var(--color-warning)', color: '#000', fontSize: '0.75rem', padding: '2px 8px' }}>
