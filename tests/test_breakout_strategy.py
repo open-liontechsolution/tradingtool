@@ -237,7 +237,7 @@ class TestExitSignals:
 
         row = df.iloc[10].copy()
         row["close"] = 98.0  # below min_exit
-        row["low"] = 98.5   # above stop_price — stop won't fire
+        row["low"] = 98.5  # above stop_price — stop won't fire
 
         state = PositionState(side="long", entry_price=90.0, stop_price=50.0, quantity=1.0)
         signals = strat.on_candle(10, row, state)
@@ -250,7 +250,7 @@ class TestExitSignals:
 
         row = df.iloc[10].copy()
         row["close"] = 102.0  # above max_exit
-        row["high"] = 101.5   # below stop_price — stop won't fire
+        row["high"] = 101.5  # below stop_price — stop won't fire
 
         state = PositionState(side="short", entry_price=110.0, stop_price=200.0, quantity=1.0)
         signals = strat.on_candle(10, row, state)

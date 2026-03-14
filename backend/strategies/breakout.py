@@ -28,7 +28,14 @@ class BreakoutStrategy(Strategy):
             ),
             ParameterDef("habilitar_long", "bool", True, None, None, "Enable long entries"),
             ParameterDef("habilitar_short", "bool", True, None, None, "Enable short entries"),
-            ParameterDef("salida_por_ruptura", "bool", True, None, None, "Exit on reversal breakout (close vs M-candle extreme). When False, only stop-loss closes the trade."),
+            ParameterDef(
+                "salida_por_ruptura",
+                "bool",
+                True,
+                None,
+                None,
+                "Exit on reversal breakout (close vs M-candle extreme). When False, only stop-loss closes the trade.",
+            ),
             ParameterDef("coste_total_bps", "float", 10.0, 0.0, 100.0, "Round-trip transaction cost in basis points"),
         ]
 
