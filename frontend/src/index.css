@@ -702,17 +702,17 @@ select.form-control option {
 
 
 /* ---- Shared trade table column alignment ---- */
-.signals-trades-table .trade-col-id,
-.signals-trades-table .trade-col-num {
+.signals-trades-table .sp-trade-col-id,
+.signals-trades-table .sp-trade-col-num {
   text-align: right;
 }
 
-.signals-trades-table .trade-col-status,
-.signals-trades-table .trade-col-side,
-.signals-trades-table .trade-col-actions {
+.signals-trades-table .sp-trade-col-status,
+.signals-trades-table .sp-trade-col-side,
+.signals-trades-table .sp-trade-col-actions {
   text-align: center;
 }
 
-.signals-trades-table .trade-col-text {
+.signals-trades-table .sp-trade-col-text {
   text-align: left;
 }
