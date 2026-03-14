@@ -230,6 +230,44 @@ class TestExitSignals:
         signals = strat.on_candle(10, df.iloc[10], state)
         assert not any(s.action in ("exit_long", "exit_short") for s in signals)
 
+    def test_no_exit_long_when_salida_por_ruptura_disabled(self):
+        """With salida_por_ruptura=False, no exit_long even if close < min_exit."""
+        closes = [100.0] * 15
+        strat, df = _run_strategy(closes, params={"N_entrada": 5, "M_salida": 3, "salida_por_ruptura": False})
+
+        row = df.iloc[10].copy()
+        row["close"] = 98.0  # below min_exit
+        row["low"] = 98.5   # above stop_price — stop won't fire
+
+        state = PositionState(side="long", entry_price=90.0, stop_price=50.0, quantity=1.0)
+        signals = strat.on_candle(10, row, state)
+        assert not any(s.action == "exit_long" for s in signals)
+
+    def test_no_exit_short_when_salida_por_ruptura_disabled(self):
+        """With salida_por_ruptura=False, no exit_short even if close > max_exit."""
+        closes = [100.0] * 15
+        strat, df = _run_strategy(closes, params={"N_entrada": 5, "M_salida": 3, "salida_por_ruptura": False})
+
+        row = df.iloc[10].copy()
+        row["close"] = 102.0  # above max_exit
+        row["high"] = 101.5   # below stop_price — stop won't fire
+
+        state = PositionState(side="short", entry_price=110.0, stop_price=200.0, quantity=1.0)
+        signals = strat.on_candle(10, row, state)
+        assert not any(s.action == "exit_short" for s in signals)
+
+    def test_stop_still_works_when_salida_por_ruptura_disabled(self):
+        """With salida_por_ruptura=False, stop-loss still triggers normally."""
+        closes = [100.0] * 15
+        strat, df = _run_strategy(closes, params={"N_entrada": 5, "M_salida": 3, "salida_por_ruptura": False})
+
+        row = df.iloc[10].copy()
+        row["low"] = 79.0  # below stop
+
+        state = PositionState(side="long", entry_price=100.0, stop_price=80.0, quantity=1.0)
+        signals = strat.on_candle(10, row, state)
+        assert any(s.action == "stop_long" for s in signals)
+
 
 # ---------------------------------------------------------------------------
 # Stop loss signals
@@ -294,6 +332,7 @@ class TestParameterDefs:
             "modo_ejecucion",
             "habilitar_long",
             "habilitar_short",
+            "salida_por_ruptura",
             "coste_total_bps",
         }
         assert expected == names
