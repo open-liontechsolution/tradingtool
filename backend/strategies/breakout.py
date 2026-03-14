@@ -28,6 +28,14 @@ class BreakoutStrategy(Strategy):
             ),
             ParameterDef("habilitar_long", "bool", True, None, None, "Enable long entries"),
             ParameterDef("habilitar_short", "bool", True, None, None, "Enable short entries"),
+            ParameterDef(
+                "salida_por_ruptura",
+                "bool",
+                True,
+                None,
+                None,
+                "Exit on reversal breakout (close vs M-candle extreme). When False, only stop-loss closes the trade.",
+            ),
             ParameterDef("coste_total_bps", "float", 10.0, 0.0, 100.0, "Round-trip transaction cost in basis points"),
         ]
 
@@ -52,6 +60,7 @@ class BreakoutStrategy(Strategy):
         habilitar_long = bool(params.get("habilitar_long", True))
         habilitar_short = bool(params.get("habilitar_short", True))
         stop_pct = float(params.get("stop_pct", 0.02))
+        salida_por_ruptura = bool(params.get("salida_por_ruptura", True))
 
         signals: list[Signal] = []
 
@@ -73,7 +82,7 @@ class BreakoutStrategy(Strategy):
                 signals.append(Signal(action="stop_long", price=state.stop_price))
                 return signals
             # Check exit on close
-            if close < min_exit:
+            if salida_por_ruptura and close < min_exit:
                 signals.append(Signal(action="exit_long", price=close))
                 return signals
 
@@ -83,7 +92,7 @@ class BreakoutStrategy(Strategy):
                 signals.append(Signal(action="stop_short", price=state.stop_price))
                 return signals
             # Check exit on close
-            if close > max_exit:
+            if salida_por_ruptura and close > max_exit:
                 signals.append(Signal(action="exit_short", price=close))
                 return signals
 
