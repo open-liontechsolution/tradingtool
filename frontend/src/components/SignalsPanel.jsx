@@ -471,21 +471,21 @@ function SimTradesList({ trades, onClose }) {
   }
   return (
     <div style={{ overflowX: 'auto' }}>
-      <table className="trade-table" style={{ width: '100%' }}>
+      <table className="trade-table signals-trades-table" style={{ width: '100%' }}>
         <thead>
           <tr>
-            <th>ID</th>
-            <th>Config</th>
-            <th>Symbol</th>
-            <th>Side</th>
-            <th>Entry</th>
-            <th>Stop Trigger</th>
-            <th>Exit</th>
-            <th>Reason</th>
-            <th>PnL</th>
-            <th>PnL %</th>
-            <th>Status</th>
-            <th>Actions</th>
+            <th className="trade-col-id">ID</th>
+            <th className="trade-col-text">Config</th>
+            <th className="trade-col-text">Symbol</th>
+            <th className="trade-col-side">Side</th>
+            <th className="trade-col-num">Entry</th>
+            <th className="trade-col-num">Stop Trigger</th>
+            <th className="trade-col-num">Exit</th>
+            <th className="trade-col-text">Reason</th>
+            <th className="trade-col-num">PnL</th>
+            <th className="trade-col-num">PnL %</th>
+            <th className="trade-col-status">Status</th>
+            <th className="trade-col-actions">Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -493,22 +493,22 @@ function SimTradesList({ trades, onClose }) {
             const pnlColor = t.pnl > 0 ? 'var(--color-success)' : t.pnl < 0 ? 'var(--color-danger)' : 'var(--text-secondary)'
             return (
               <tr key={t.id}>
-                <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}>{t.id}</td>
-                <td>
+                <td className="trade-col-id" style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}>{t.id}</td>
+                <td className="trade-col-text">
                   <ConfigBadge configId={t.config_id} strategy={t.config_strategy} params={t.config_params} />
                 </td>
-                <td>{t.symbol}</td>
-                <td style={{ color: t.side === 'long' ? 'var(--color-success)' : 'var(--color-danger)', fontWeight: 600 }}>
+                <td className="trade-col-text">{t.symbol}</td>
+                <td className="trade-col-side" style={{ color: t.side === 'long' ? 'var(--color-success)' : 'var(--color-danger)', fontWeight: 600 }}>
                   {t.side?.toUpperCase()}
                 </td>
-                <td>{t.entry_price ? fmtNum(t.entry_price, 4) : '—'}</td>
-                <td>{fmtNum(t.stop_trigger, 4)}</td>
-                <td>{t.exit_price ? fmtNum(t.exit_price, 4) : '—'}</td>
-                <td>{t.exit_reason || '—'}</td>
-                <td style={{ color: pnlColor, fontWeight: 600 }}>{t.pnl != null ? fmtMoney(t.pnl) : '—'}</td>
-                <td style={{ color: pnlColor }}>{t.pnl_pct != null ? fmtNum(t.pnl_pct * 100, 2) + '%' : '—'}</td>
-                <td><StatusBadge status={t.status} /></td>
-                <td>
+                <td className="trade-col-num">{t.entry_price ? fmtNum(t.entry_price, 4) : '—'}</td>
+                <td className="trade-col-num">{fmtNum(t.stop_trigger, 4)}</td>
+                <td className="trade-col-num">{t.exit_price ? fmtNum(t.exit_price, 4) : '—'}</td>
+                <td className="trade-col-text">{t.exit_reason || '—'}</td>
+                <td className="trade-col-num" style={{ color: pnlColor, fontWeight: 600 }}>{t.pnl != null ? fmtMoney(t.pnl) : '—'}</td>
+                <td className="trade-col-num" style={{ color: pnlColor }}>{t.pnl_pct != null ? fmtNum(t.pnl_pct * 100, 2) + '%' : '—'}</td>
+                <td className="trade-col-status"><StatusBadge status={t.status} /></td>
+                <td className="trade-col-actions">
                   {t.status === 'open' && (
                     <button className="btn btn-sm btn-secondary" onClick={() => onClose(t.id)}>Close</button>
                   )}
@@ -678,20 +678,20 @@ function RealTradesSection() {
         <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>No real trades registered.</div>
       ) : (
         <div style={{ overflowX: 'auto' }}>
-          <table className="trade-table" style={{ width: '100%' }}>
+          <table className="trade-table signals-trades-table" style={{ width: '100%' }}>
             <thead>
               <tr>
-                <th>ID</th>
-                <th>Sim #</th>
-                <th>Symbol</th>
-                <th>Side</th>
-                <th>Entry</th>
-                <th>Exit</th>
-                <th>PnL</th>
-                <th>Fees</th>
-                <th>Status</th>
-                <th>Notes</th>
-                <th>Actions</th>
+                <th className="trade-col-id">ID</th>
+                <th className="trade-col-id">Sim #</th>
+                <th className="trade-col-text">Symbol</th>
+                <th className="trade-col-side">Side</th>
+                <th className="trade-col-num">Entry</th>
+                <th className="trade-col-num">Exit</th>
+                <th className="trade-col-num">PnL</th>
+                <th className="trade-col-num">Fees</th>
+                <th className="trade-col-status">Status</th>
+                <th className="trade-col-text">Notes</th>
+                <th className="trade-col-actions">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -700,21 +700,21 @@ function RealTradesSection() {
                 return (
                   <React.Fragment key={t.id}>
                   <tr>
-                    <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}>{t.id}</td>
-                    <td>{t.sim_trade_id || '—'}</td>
-                    <td>{t.symbol}</td>
-                    <td style={{ color: t.side === 'long' ? 'var(--color-success)' : 'var(--color-danger)', fontWeight: 600 }}>
+                    <td className="trade-col-id" style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}>{t.id}</td>
+                    <td className="trade-col-id">{t.sim_trade_id || '—'}</td>
+                    <td className="trade-col-text">{t.symbol}</td>
+                    <td className="trade-col-side" style={{ color: t.side === 'long' ? 'var(--color-success)' : 'var(--color-danger)', fontWeight: 600 }}>
                       {t.side?.toUpperCase()}
                     </td>
-                    <td>{fmtNum(t.entry_price, 4)}</td>
-                    <td>{t.exit_price ? fmtNum(t.exit_price, 4) : '—'}</td>
-                    <td style={{ color: pnlColor, fontWeight: 600 }}>{t.pnl != null ? fmtMoney(t.pnl) : '—'}</td>
-                    <td>{fmtNum(t.fees, 2)}</td>
-                    <td><StatusBadge status={t.status} /></td>
-                    <td style={{ fontSize: '0.8rem', maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    <td className="trade-col-num">{fmtNum(t.entry_price, 4)}</td>
+                    <td className="trade-col-num">{t.exit_price ? fmtNum(t.exit_price, 4) : '—'}</td>
+                    <td className="trade-col-num" style={{ color: pnlColor, fontWeight: 600 }}>{t.pnl != null ? fmtMoney(t.pnl) : '—'}</td>
+                    <td className="trade-col-num">{fmtNum(t.fees, 2)}</td>
+                    <td className="trade-col-status"><StatusBadge status={t.status} /></td>
+                    <td className="trade-col-text" style={{ fontSize: '0.8rem', maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {t.notes || '—'}
                     </td>
-                    <td>
+                    <td className="trade-col-actions">
                       {t.status === 'open' && closingId !== t.id && (
                         <button className="btn btn-sm" onClick={() => openCloseForm(t)}
                           style={{ background: 'var(--color-warning)', color: '#000', fontSize: '0.75rem', padding: '2px 8px' }}>

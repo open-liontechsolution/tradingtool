@@ -699,3 +699,20 @@ select.form-control option {
 .config-badge-wrap:hover .config-badge-popover {
   display: block;
 }
+
+
+/* ---- Shared trade table column alignment ---- */
+.signals-trades-table .trade-col-id,
+.signals-trades-table .trade-col-num {
+  text-align: right;
+}
+
+.signals-trades-table .trade-col-status,
+.signals-trades-table .trade-col-side,
+.signals-trades-table .trade-col-actions {
+  text-align: center;
+}
+
+.signals-trades-table .trade-col-text {
+  text-align: left;
+}
