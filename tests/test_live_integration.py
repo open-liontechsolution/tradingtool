@@ -6,9 +6,6 @@ pre-loads candle data into a temp SQLite DB, and calls the internal functions
 (scan_config, _fill_pending_entries, _check_intrabar_stops, _check_candle_close_exits)
 directly — the same way backtest_engine iterates over candles without asyncio.sleep.
 
-Known bugs documented here (see plan for details):
-  - Bug #5: _check_candle_close_exits labels stop-on-candle-close as 'stop_intrabar'
-  - Bug #6: strategy receives stop_base while intrabar check uses stop_trigger (different levels)
 """
 
 from __future__ import annotations
@@ -590,11 +587,7 @@ class TestCandleCloseExit:
 
     @pytest.mark.asyncio
     async def test_stop_on_candle_close_fallback(self):
-        """Stop detected via candle Low triggers a close.
-
-        Known bug #5: exit_reason is labeled 'stop_intrabar' even though
-        the stop was detected on candle close, not intrabar.
-        """
+        """Stop detected via candle Low on close is labeled 'stop_candle'."""
         await _setup_db()
         config = await _insert_config()
 
@@ -626,7 +619,7 @@ class TestCandleCloseExit:
             )
             await db.commit()
 
-        # Stop candle: low=90 ≤ stop_base=96.04 → stop_long fires
+        # Stop candle: low=90 ≤ stop_trigger=94.12 → stop_long fires
         flat = _make_flat_candles(30)
         breakout_t = flat[-1]["open_time"] + STEP_MS
         stop_t = breakout_t + STEP_MS
@@ -634,7 +627,7 @@ class TestCandleCloseExit:
             "open_time": stop_t,
             "open": 125.0,
             "high": 126.0,
-            "low": 90.0,  # low <= stop_base (96.04) → stop_long
+            "low": 90.0,  # low <= stop_trigger (94.12) → stop_long
             "close": 97.0,
             "volume": 1000.0,
         }
@@ -657,8 +650,7 @@ class TestCandleCloseExit:
 
         trades = await _get_sim_trades(status="closed")
         assert len(trades) == 1
-        # Bug #5: labeled as 'stop_intrabar' even though caught on candle close
-        assert trades[0]["exit_reason"] == "stop_intrabar"
+        assert trades[0]["exit_reason"] == "stop_candle"
         assert trades[0]["exit_price"] == pytest.approx(stop_trigger)
         assert trades[0]["pnl"] < 0
 
