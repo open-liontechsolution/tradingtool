@@ -281,11 +281,12 @@ async def _check_intrabar_stops() -> None:
 # ---------------------------------------------------------------------------
 
 
-async def _check_candle_close_exits() -> None:
-    """On new closed candle, evaluate exit signals using the strategy."""
-    async with get_db() as db:
-        cursor = await db.execute(
-            """SELECT st.id, st.symbol, st.interval, st.side, st.entry_price,
+async def _check_candle_close_exits(interval: str | None = None) -> None:
+    """On new closed candle, evaluate exit signals using the strategy.
+
+    When ``interval`` is provided, only trades on that timeframe are evaluated.
+    """
+    base_query = """SELECT st.id, st.symbol, st.interval, st.side, st.entry_price,
                       st.entry_time, st.stop_base, st.stop_trigger,
                       st.quantity, st.portfolio, st.invested_amount, st.fees,
                       st.config_id, st.signal_id,
@@ -293,7 +294,12 @@ async def _check_candle_close_exits() -> None:
                FROM sim_trades st
                JOIN signal_configs sc ON st.config_id = sc.id
                WHERE st.status = 'open'"""
-        )
+
+    async with get_db() as db:
+        if interval is not None:
+            cursor = await db.execute(base_query + " AND st.interval = ?", (interval,))
+        else:
+            cursor = await db.execute(base_query)
         rows = await cursor.fetchall()
         cols = [d[0] for d in cursor.description]
     open_trades = [dict(zip(cols, row, strict=False)) for row in rows]
@@ -353,12 +359,14 @@ async def _check_candle_close_exits() -> None:
         candle = df.iloc[t_last]
 
         for trade in trades:
-            # Build position state matching the open trade
+            # Build position state matching the open trade.
+            # Use stop_trigger so the strategy's candle-close stop check aligns
+            # with the intrabar polling threshold (both apply the stop_cross_pct buffer).
             state = PositionState(
                 side=trade["side"],
                 entry_price=float(trade["entry_price"]),
                 entry_time=int(trade["entry_time"]),
-                stop_price=float(trade["stop_base"]),
+                stop_price=float(trade["stop_trigger"]),
                 quantity=float(trade["quantity"]),
             )
 
@@ -452,7 +460,7 @@ async def _check_candle_close_exits() -> None:
                         await db.execute(
                             """UPDATE sim_trades
                                SET exit_price = ?, exit_time = ?,
-                                   exit_reason = 'stop_intrabar',
+                                   exit_reason = 'stop_candle',
                                    status = 'closed', pnl = ?, pnl_pct = ?,
                                    fees = ?, updated_at = ?
                                WHERE id = ?""",
@@ -512,7 +520,7 @@ async def run_live_tracker() -> None:
                 if current_open > last_checked:
                     # A new candle has opened → the previous one just closed
                     _last_candle_check[interval] = current_open
-                    await _check_candle_close_exits()
+                    await _check_candle_close_exits(interval)
 
         except asyncio.CancelledError:
             logger.info("Live tracker cancelled")

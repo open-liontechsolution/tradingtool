@@ -16,18 +16,6 @@ from backend.strategies.base import PositionState
 
 logger = logging.getLogger(__name__)
 
-# Offset (seconds) after theoretical candle close before scanning.
-# Gives time for the candle to appear in the DB.
-SCAN_OFFSET_S: dict[str, int] = {
-    "1h": 30,
-    "4h": 30,
-    "1d": 60,
-    "3d": 60,
-    "1w": 120,
-    "1M": 120,
-}
-DEFAULT_SCAN_OFFSET_S = 30
-
 # How many candles to load for strategy warmup (N_entrada + M_salida + margin)
 WARMUP_CANDLES = 600
 
@@ -62,16 +50,6 @@ async def _get_active_configs() -> list[dict]:
         rows = await cursor.fetchall()
         cols = [d[0] for d in cursor.description]
     return [dict(zip(cols, row, strict=False)) for row in rows]
-
-
-async def _signal_exists(config_id: int, trigger_candle_time: int) -> bool:
-    """Check if a signal already exists for this config+candle (dedup)."""
-    async with get_db() as db:
-        cursor = await db.execute(
-            "SELECT 1 FROM signals WHERE config_id = ? AND trigger_candle_time = ?",
-            (config_id, trigger_candle_time),
-        )
-        return await cursor.fetchone() is not None
 
 
 async def _has_active_trade(config_id: int) -> bool:
