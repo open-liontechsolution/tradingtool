@@ -17,7 +17,9 @@ from starlette.responses import Response
 
 from backend.api.backtest_routes import router as backtest_router
 from backend.api.data_routes import router as data_router
+from backend.api.profile_routes import router as profile_router
 from backend.api.signal_routes import router as signal_router
+from backend.api.telegram_routes import router as telegram_router
 from backend.auth import get_current_user
 from backend.config import (
     AUTH_ENABLED,
@@ -27,10 +29,13 @@ from backend.config import (
     KEYCLOAK_FRONTEND_CLIENT_ID,
     KEYCLOAK_REALM,
     KEYCLOAK_URL,
+    TELEGRAM_ENABLED,
+    TELEGRAM_WEBHOOK_URL,
 )
 from backend.database import get_db, init_db
 from backend.live_tracker import run_live_tracker
 from backend.signal_engine import run_signal_scanner
+from backend.telegram_client import set_webhook as telegram_set_webhook
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +44,13 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     logger.info("Database backend: %s", "PostgreSQL" if IS_POSTGRES else "SQLite (ephemeral)")
     await init_db()
+
+    if TELEGRAM_ENABLED and TELEGRAM_WEBHOOK_URL:
+        logger.info("Registering Telegram webhook at %s", TELEGRAM_WEBHOOK_URL)
+        ok = await telegram_set_webhook(TELEGRAM_WEBHOOK_URL)
+        if not ok:
+            logger.warning("Telegram setWebhook call failed — check token/URL")
+
     scanner_task = asyncio.create_task(run_signal_scanner())
     tracker_task = asyncio.create_task(run_live_tracker())
     yield
@@ -75,6 +87,9 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 app.include_router(data_router, prefix="/api", dependencies=[Depends(get_current_user)])
 app.include_router(backtest_router, prefix="/api", dependencies=[Depends(get_current_user)])
 app.include_router(signal_router, prefix="/api", dependencies=[Depends(get_current_user)])
+app.include_router(profile_router, prefix="/api", dependencies=[Depends(get_current_user)])
+# Telegram webhook is authenticated via path secret + header, NOT via Keycloak.
+app.include_router(telegram_router, prefix="/api")
 
 
 @app.get("/api/auth/config", tags=["auth"])

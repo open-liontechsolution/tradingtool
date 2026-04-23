@@ -364,11 +364,23 @@ async def init_db() -> None:
                 event_type              TEXT    NOT NULL,
                 reference_type          TEXT    NOT NULL,
                 reference_id            INTEGER NOT NULL,
+                channel                 TEXT    NOT NULL DEFAULT 'internal',
+                user_id                 INTEGER REFERENCES users(id),
                 message                 TEXT,
                 sent_at                 TEXT    NOT NULL
             );
             CREATE UNIQUE INDEX IF NOT EXISTS idx_notification_dedup
-                ON notification_log (event_type, reference_type, reference_id);
+                ON notification_log (event_type, reference_type, reference_id, channel);
+
+            CREATE TABLE IF NOT EXISTS telegram_link_tokens (
+                token                   TEXT    PRIMARY KEY,
+                user_id                 INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                created_at              TEXT    NOT NULL,
+                expires_at              TEXT    NOT NULL,
+                used_at                 TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_telegram_link_tokens_user
+                ON telegram_link_tokens (user_id);
         """)
         await db.commit()
 
@@ -377,11 +389,44 @@ async def init_db() -> None:
         # ------------------------------------------------------------------
         # Add user_id to signal_configs if it doesn't exist yet (existing DBs).
         cursor = await db.execute("PRAGMA table_info(signal_configs)")
-        columns = {row[1] for row in await cursor.fetchall()}
-        if "user_id" not in columns:
+        sc_columns = {row[1] for row in await cursor.fetchall()}
+        if "user_id" not in sc_columns:
             await db.execute("ALTER TABLE signal_configs ADD COLUMN user_id INTEGER REFERENCES users(id)")
+            await db.commit()
+        if "telegram_enabled" not in sc_columns:
+            await db.execute("ALTER TABLE signal_configs ADD COLUMN telegram_enabled INTEGER NOT NULL DEFAULT 0")
             await db.commit()
 
         # Ensure index exists (safe even if column was just added)
         await db.execute("CREATE INDEX IF NOT EXISTS idx_signal_configs_user ON signal_configs (user_id)")
+        await db.commit()
+
+        # --- users: Telegram link columns --------------------------------
+        cursor = await db.execute("PRAGMA table_info(users)")
+        u_columns = {row[1] for row in await cursor.fetchall()}
+        if "telegram_chat_id" not in u_columns:
+            await db.execute("ALTER TABLE users ADD COLUMN telegram_chat_id INTEGER")
+            await db.execute("ALTER TABLE users ADD COLUMN telegram_username TEXT")
+            await db.execute("ALTER TABLE users ADD COLUMN telegram_linked_at TEXT")
+            await db.commit()
+        # Unique on telegram_chat_id (SQLite allows multiple NULLs by default).
+        await db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_telegram_chat_id ON users (telegram_chat_id)")
+        await db.commit()
+
+        # --- notification_log: channel + user_id + swap unique index -----
+        cursor = await db.execute("PRAGMA table_info(notification_log)")
+        nl_columns = {row[1] for row in await cursor.fetchall()}
+        if "channel" not in nl_columns:
+            await db.execute("ALTER TABLE notification_log ADD COLUMN channel TEXT NOT NULL DEFAULT 'internal'")
+            await db.commit()
+        if "user_id" not in nl_columns:
+            await db.execute("ALTER TABLE notification_log ADD COLUMN user_id INTEGER REFERENCES users(id)")
+            await db.commit()
+        # Replace old unique (event_type, reference_type, reference_id) with
+        # (event_type, reference_type, reference_id, channel).
+        await db.execute("DROP INDEX IF EXISTS idx_notification_dedup")
+        await db.execute(
+            "CREATE UNIQUE INDEX idx_notification_dedup "
+            "ON notification_log (event_type, reference_type, reference_id, channel)"
+        )
         await db.commit()

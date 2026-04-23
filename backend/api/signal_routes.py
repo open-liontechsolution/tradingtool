@@ -35,6 +35,7 @@ class SignalConfigCreate(BaseModel):
     leverage: float | None = None
     cost_bps: float = 10.0
     polling_interval_s: int | None = None
+    telegram_enabled: bool = False
 
 
 class SignalConfigPatch(BaseModel):
@@ -45,6 +46,7 @@ class SignalConfigPatch(BaseModel):
     leverage: float | None = None
     cost_bps: float | None = None
     polling_interval_s: int | None = None
+    telegram_enabled: bool | None = None
 
 
 class RealTradeCreate(BaseModel):
@@ -99,9 +101,9 @@ async def create_signal_config(
                 """INSERT INTO signal_configs
                     (user_id, symbol, interval, strategy, params, stop_cross_pct,
                      portfolio, invested_amount, leverage, cost_bps,
-                     polling_interval_s, active, last_processed_candle,
+                     polling_interval_s, active, telegram_enabled, last_processed_candle,
                      created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0, ?, ?)""",
                 (
                     user.id,
                     req.symbol.upper(),
@@ -114,6 +116,7 @@ async def create_signal_config(
                     req.leverage,
                     req.cost_bps,
                     req.polling_interval_s,
+                    1 if req.telegram_enabled else 0,
                     now,
                     now,
                 ),
@@ -151,6 +154,7 @@ async def list_signal_configs(
         c = dict(zip(cols, row, strict=False))
         c["params"] = json.loads(c["params"]) if isinstance(c["params"], str) else c["params"]
         c["active"] = bool(c["active"])
+        c["telegram_enabled"] = bool(c.get("telegram_enabled"))
         configs.append(c)
     return {"configs": configs}
 
@@ -186,6 +190,9 @@ async def patch_signal_config(
     if req.polling_interval_s is not None:
         fields.append("polling_interval_s = ?")
         values.append(req.polling_interval_s)
+    if req.telegram_enabled is not None:
+        fields.append("telegram_enabled = ?")
+        values.append(1 if req.telegram_enabled else 0)
 
     if not fields:
         raise HTTPException(400, "No fields to update")

@@ -342,7 +342,7 @@ function ConfigForm({ strategies, onCreated }) {
 }
 
 /* ---- Configs list ---- */
-function ConfigsList({ configs, onToggle, onDelete }) {
+function ConfigsList({ configs, onToggle, onToggleTelegram, onDelete }) {
   if (!configs || configs.length === 0) {
     return <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem', padding: 'var(--space-3)' }}>No signal configs yet.</div>
   }
@@ -359,6 +359,7 @@ function ConfigsList({ configs, onToggle, onDelete }) {
             <th className="ta-right">Portfolio</th>
             <th className="ta-right">Stop Cross %</th>
             <th className="ta-center">Active</th>
+            <th className="ta-center" title="Enviar alertas a Telegram para esta configuración">Telegram</th>
             <th className="ta-center">Actions</th>
           </tr>
         </thead>
@@ -373,6 +374,9 @@ function ConfigsList({ configs, onToggle, onDelete }) {
               <td className="ta-right num-col">{fmtNum(c.stop_cross_pct * 100, 1)}%</td>
               <td className="ta-center">
                 <ToggleSwitch checked={c.active} onChange={(val) => onToggle(c.id, val)} />
+              </td>
+              <td className="ta-center">
+                <ToggleSwitch checked={!!c.telegram_enabled} onChange={(val) => onToggleTelegram(c.id, val)} />
               </td>
               <td className="ta-center">
                 <button className="btn btn-sm btn-secondary" style={{ color: 'var(--color-danger)' }}
@@ -959,6 +963,15 @@ export default function SignalsPanel() {
     fetchConfigs()
   }
 
+  const handleToggleTelegram = async (id, telegram_enabled) => {
+    await apiFetch(`/api/signals/configs/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ telegram_enabled }),
+    })
+    fetchConfigs()
+  }
+
   const handleDelete = async (id) => {
     await apiFetch(`/api/signals/configs/${id}`, { method: 'DELETE' })
     refreshAll()
@@ -1016,7 +1029,7 @@ export default function SignalsPanel() {
           </div>
           <div className="card-body">
             <div className="section-title">Active Configurations</div>
-            <ConfigsList configs={configs} onToggle={handleToggle} onDelete={handleDelete} onRefresh={fetchConfigs} />
+            <ConfigsList configs={configs} onToggle={handleToggle} onToggleTelegram={handleToggleTelegram} onDelete={handleDelete} onRefresh={fetchConfigs} />
             <hr className="divider" />
             <div className="section-title">New Configuration</div>
             <ConfigForm strategies={strategies} onCreated={refreshAll} />
