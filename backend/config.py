@@ -35,3 +35,18 @@ PORT: int = int(os.environ.get("PORT", "8000"))
 HOST: str = os.environ.get("HOST", "0.0.0.0")
 LOG_LEVEL: str = os.environ.get("LOG_LEVEL", "info")
 CORS_ORIGINS: list[str] = [o.strip() for o in os.environ.get("CORS_ORIGINS", "*").split(",") if o.strip()]
+
+PUBLIC_BASE_URL: str = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
+
+# ---------------------------------------------------------------------------
+# Telegram notifications
+# ---------------------------------------------------------------------------
+# When TELEGRAM_BOT_TOKEN is empty the whole Telegram subsystem is a no-op
+# (safe default for tests, CI and deployments without a bot configured).
+
+TELEGRAM_BOT_TOKEN: str = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+TELEGRAM_BOT_USERNAME: str = os.environ.get("TELEGRAM_BOT_USERNAME", "").strip().lstrip("@")
+TELEGRAM_WEBHOOK_SECRET: str = os.environ.get("TELEGRAM_WEBHOOK_SECRET", "").strip()
+TELEGRAM_WEBHOOK_URL: str = os.environ.get("TELEGRAM_WEBHOOK_URL", "").strip().rstrip("/")
+
+TELEGRAM_ENABLED: bool = bool(TELEGRAM_BOT_TOKEN)

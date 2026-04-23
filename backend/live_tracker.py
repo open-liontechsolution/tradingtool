@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 import logging
 import time
@@ -13,6 +12,7 @@ from backend.binance_client import binance_client
 from backend.database import get_db
 from backend.download_engine import INTERVAL_MS, ensure_candles
 from backend.metrics_engine import load_candles_df
+from backend.notifications import notify_event
 from backend.strategies import get_strategy
 from backend.strategies.base import PositionState
 
@@ -78,7 +78,8 @@ async def _fill_pending_entries() -> None:
         cursor = await db.execute(
             """SELECT st.id, st.symbol, st.interval, st.side, st.signal_id,
                       st.invested_amount, st.portfolio, st.leverage,
-                      s.trigger_candle_time, sc.cost_bps
+                      st.stop_base, st.stop_trigger, st.config_id,
+                      s.trigger_candle_time, sc.cost_bps, sc.strategy
                FROM sim_trades st
                JOIN signals s ON st.signal_id = s.id
                JOIN signal_configs sc ON st.config_id = sc.id
@@ -161,6 +162,25 @@ async def _fill_pending_entries() -> None:
             trade["symbol"],
             entry_price,
             quantity,
+        )
+
+        await notify_event(
+            event_type="entry",
+            config_id=trade["config_id"],
+            reference_type="sim_trade",
+            reference_id=trade["id"],
+            payload={
+                "symbol": trade["symbol"],
+                "interval": trade["interval"],
+                "side": trade["side"],
+                "strategy": trade["strategy"],
+                "entry_price": entry_price,
+                "stop_price": float(trade["stop_base"]),
+                "stop_trigger": float(trade["stop_trigger"]),
+                "invested_amount": invested,
+                "leverage": float(trade["leverage"]) if trade.get("leverage") is not None else 1.0,
+                "sim_trade_id": trade["id"],
+            },
         )
 
 
@@ -252,14 +272,6 @@ async def _check_intrabar_stops() -> None:
                 "UPDATE signals SET status = 'closed' WHERE id = ?",
                 (trade["signal_id"],),
             )
-            # Log notification (dedup via unique index)
-            with contextlib.suppress(Exception):
-                await db.execute(
-                    """INSERT INTO notification_log
-                        (event_type, reference_type, reference_id, message, sent_at)
-                       VALUES ('stop_hit', 'sim_trade', ?, ?, ?)""",
-                    (trade["id"], f"Stop hit on {trade['symbol']} {trade['side']} at {exec_price:.6f}", now),
-                )
             await db.commit()
 
         logger.info(
@@ -269,6 +281,23 @@ async def _check_intrabar_stops() -> None:
             trade["symbol"],
             exec_price,
             net_pnl,
+        )
+
+        await notify_event(
+            event_type="stop_hit",
+            config_id=trade["config_id"],
+            reference_type="sim_trade",
+            reference_id=trade["id"],
+            payload={
+                "symbol": trade["symbol"],
+                "interval": trade["interval"],
+                "side": trade["side"],
+                "exit_price": exec_price,
+                "pnl": net_pnl,
+                "pnl_pct": pnl_pct,
+                "exit_reason": "stop_intrabar",
+                "sim_trade_id": trade["id"],
+            },
         )
 
         # Check liquidation
@@ -403,18 +432,28 @@ async def _check_candle_close_exits(interval: str | None = None) -> None:
                             "UPDATE signals SET status = 'closed' WHERE id = ?",
                             (trade["signal_id"],),
                         )
-                        with contextlib.suppress(Exception):
-                            await db.execute(
-                                """INSERT INTO notification_log
-                                    (event_type, reference_type, reference_id, message, sent_at)
-                                   VALUES ('exit_signal', 'sim_trade', ?, ?, ?)""",
-                                (
-                                    trade["id"],
-                                    f"Exit signal on {trade['symbol']} {trade['side']} at {exec_price:.6f}",
-                                    now,
-                                ),
-                            )
                         await db.commit()
+
+                    duration = max(
+                        (int(candle["open_time"]) - int(trade["entry_time"])) // step_ms,
+                        0,
+                    )
+                    await notify_event(
+                        event_type="exit_signal",
+                        config_id=trade["config_id"],
+                        reference_type="sim_trade",
+                        reference_id=trade["id"],
+                        payload={
+                            "symbol": trade["symbol"],
+                            "interval": trade["interval"],
+                            "side": trade["side"],
+                            "exit_price": exec_price,
+                            "pnl": net_pnl,
+                            "pnl_pct": pnl_pct,
+                            "duration_candles": duration,
+                            "sim_trade_id": trade["id"],
+                        },
+                    )
 
                     logger.info(
                         "SimTrade %d EXIT: %s %s exec=%.6f pnl=%.4f",
@@ -470,18 +509,24 @@ async def _check_candle_close_exits(interval: str | None = None) -> None:
                             "UPDATE signals SET status = 'closed' WHERE id = ?",
                             (trade["signal_id"],),
                         )
-                        with contextlib.suppress(Exception):
-                            await db.execute(
-                                """INSERT INTO notification_log
-                                    (event_type, reference_type, reference_id, message, sent_at)
-                                   VALUES ('stop_hit', 'sim_trade', ?, ?, ?)""",
-                                (
-                                    trade["id"],
-                                    f"Stop hit (candle) on {trade['symbol']} {trade['side']} at {exec_price:.6f}",
-                                    now,
-                                ),
-                            )
                         await db.commit()
+
+                    await notify_event(
+                        event_type="stop_hit",
+                        config_id=trade["config_id"],
+                        reference_type="sim_trade",
+                        reference_id=trade["id"],
+                        payload={
+                            "symbol": trade["symbol"],
+                            "interval": trade["interval"],
+                            "side": trade["side"],
+                            "exit_price": exec_price,
+                            "pnl": net_pnl,
+                            "pnl_pct": pnl_pct,
+                            "exit_reason": "stop_candle",
+                            "sim_trade_id": trade["id"],
+                        },
+                    )
 
                     logger.info(
                         "SimTrade %d STOP (candle): %s %s exec=%.6f pnl=%.4f",
