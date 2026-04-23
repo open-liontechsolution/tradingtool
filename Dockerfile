@@ -17,6 +17,9 @@ RUN npm run build
 # ---------------------------------------------------------------------------
 FROM python:3.13-slim AS production
 
+# Unbuffered stdout/stderr so uvicorn/app logs reach kubectl without delay.
+ENV PYTHONUNBUFFERED=1
+
 # Create non-root user
 RUN groupadd --gid 1001 appgroup \
     && useradd --uid 1001 --gid appgroup --no-create-home appuser
