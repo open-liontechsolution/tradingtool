@@ -109,6 +109,10 @@ One shared bot per deployment. Each user links their own chat on first use:
 3. Telegram POSTs the update to `/api/telegram/webhook/{secret}`; the webhook consumes the token and stores `telegram_chat_id` / `telegram_username` on the user row.
 
 Outbound alerts flow through a single entry point — `notifications.notify_event` — which live_tracker calls at four sites (entry fill, exit signal, intrabar stop, candle-close stop). The dispatcher filters by the per-config `telegram_enabled` toggle + the user's linked chat, and dedupes on `notification_log (event_type, reference_type, reference_id, channel)`. The whole subsystem is inert (no HTTP, no reply) whenever `TELEGRAM_BOT_TOKEN` is empty — this is the invariant that keeps tests and CI green without mocking the network.
+### Live-mode invariants
+
+- **Sim-trade lifecycle**: `pending_entry` → `open` → `closed`. On close, `exit_reason` ∈ `{stop_intrabar, stop_candle, exit_signal, manual, config_deleted}`.
+- **Stop levels**: `stop_base` is the strategy's raw stop. `stop_trigger = stop_base × (1 − stop_cross_pct)` for longs, `× (1 + stop_cross_pct)` for shorts. Both the intrabar ticker check and the candle-close strategy state use `stop_trigger` so the two paths fire at the same price.
 
 ## Key Environment Variables
 
@@ -135,6 +139,13 @@ Frontend-only (placed in `frontend/.env.development.local`, only needed to overr
 
 - Linter/formatter: **ruff** (`ruff.toml`). `target-version = "py313"`, line-length 120.
 - Tests: **pytest** + **pytest-asyncio**. Async tests use `@pytest.mark.asyncio` directly — no project-level `conftest.py`.
+
+## Testing conventions
+
+- **No shared `conftest.py`**: each test file defines its own `_use_temp_db` autouse fixture (sets `DB_PATH` env var *and* patches `backend.database.DB_PATH`) plus local `_insert_config` / `_setup_db` helpers. Follow this pattern in new tests.
+- **Time-travel tests**: `signal_engine.py` and `live_tracker.py` each define their own `_now_ms()` (copy, not shared import). Patch both when a test spans the two modules: `patch("backend.signal_engine._now_ms", return_value=fake_ms)` and `patch("backend.live_tracker._now_ms", ...)`.
+- **Patch imported functions at the consumer**: `ensure_candles` and `load_candles_df` are imported into `signal_engine` / `live_tracker`. Patch `backend.signal_engine.ensure_candles` (the binding in that module), not `backend.download_engine.ensure_candles`.
+- `klines` numeric fields are stored as TEXT strings (Binance format) — cast with `str()` on insert, `float()` on read.
 
 ## Deployment
 
