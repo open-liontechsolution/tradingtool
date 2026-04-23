@@ -61,13 +61,17 @@ DATABASE_URL=postgresql://... alembic upgrade head
 | `backtest_engine.py` | Vectorised backtest runner; results held in memory keyed by `backtest_id` |
 | `backtest_metrics.py` | Computes performance stats (Sharpe, drawdown, win-rate, etc.) from a trade log |
 | `signal_engine.py` | Background loop: polls active `signal_configs`, calls `ensure_candles`, runs `strategy.on_candle()`, persists signals, spawns sim trades |
-| `live_tracker.py` | Background loop: updates open `sim_trades` (entry fills, stop-outs, exits) from live Binance ticker price |
+| `live_tracker.py` | Background loop: updates open `sim_trades` (entry fills, stop-outs, exits) from live Binance ticker price; emits user-facing notifications via `notifications.notify_event` |
+| `notifications.py` | Unified dispatcher for user-facing trade events. Resolves the recipient from `signal_configs.user_id`, honours the per-config `telegram_enabled` toggle, dedupes through `notification_log (event_type, reference_type, reference_id, channel)` and sends Telegram when all gates pass. Supported event types: `entry`, `exit_signal`, `stop_hit`, `stop_moved` (reserved for trailing-stop feature — see corresponding GitHub issue) |
+| `telegram_client.py` | Thin async Telegram Bot API client (`send_message`, `set_webhook`, MarkdownV2 `escape_md`). No-op when `TELEGRAM_BOT_TOKEN` is unset — safe default for tests and CI |
 | `strategies/base.py` | `Strategy` ABC: defines `get_parameters()`, `init()`, `on_candle()` interface shared by all strategies |
 | `strategies/breakout.py` | Breakout strategy implementation |
 | `strategies/support_resistance.py` | Support/resistance strategy implementation |
 | `api/data_routes.py` | `/api/pairs`, `/api/download`, `/api/candles`, `/api/metrics`, ... |
 | `api/backtest_routes.py` | `/api/strategies`, `/api/backtest` |
-| `api/signal_routes.py` | `/api/signals`, `/api/sim-trades`, `/api/real-trades` |
+| `api/signal_routes.py` | `/api/signals`, `/api/sim-trades`, `/api/real-trades`. `signal_configs` payloads accept `telegram_enabled` on create/patch |
+| `api/profile_routes.py` | `/api/profile/telegram` — link-token issuance, status, unlink |
+| `api/telegram_routes.py` | `/api/telegram/webhook/{secret}` — **not** protected by Keycloak; authenticated via path secret + `X-Telegram-Bot-Api-Secret-Token` header |
 
 ### Frontend modules (`frontend/src/`)
 
@@ -76,7 +80,8 @@ DATABASE_URL=postgresql://... alembic upgrade head
 | `auth/` | OIDC login via `oidc-client-ts`; `AuthProvider` fetches config from `/api/auth/config`; `apiFetch` wraps `fetch` with Bearer token |
 | `DataManager.jsx` | Download historical data, view candles, compute metrics (admin-only) |
 | `BacktestPanel.jsx` | Configure and run backtests; shows equity chart and trade log |
-| `SignalsPanel.jsx` | Manage signal configs; view active signals and sim/real trades |
+| `SignalsPanel.jsx` | Manage signal configs (incl. per-config Telegram toggle); view active signals and sim/real trades |
+| `ProfilePanel.jsx` | User profile page; Telegram linking flow (generate link → user pastes deep-link → poll until bound) |
 | `EquityChart.jsx` | Recharts equity curve |
 | `TradeReviewChart.jsx` | `lightweight-charts` candlestick chart for individual trade review |
 
@@ -87,11 +92,23 @@ Two modes selected by the `DATABASE_URL` env var:
 - **SQLite (default/dev):** schema created inline by `init_db()`, file at `data/trading_tools.db`. Additive migrations use `PRAGMA table_info` + `ALTER TABLE` guards.
 - **PostgreSQL (prod):** Alembic runs automatically at startup. Migrations in `alembic/versions/`.
 
-Core tables: `klines`, `download_jobs`, `derived_metrics`, `users`, `signal_configs`, `signals`, `sim_trades`, `real_trades`, `notification_log`.
+Core tables: `klines`, `download_jobs`, `derived_metrics`, `users`, `signal_configs`, `signals`, `sim_trades`, `real_trades`, `notification_log`, `telegram_link_tokens`.
+
+Keep the inline SQLite migration in `init_db()` and the Alembic revision in lockstep — both must produce the same final schema. Any new column/table lands in both or neither.
 
 ### Strategy plugin pattern
 
 New strategies must extend `backend/strategies/base.py::Strategy`, implement `get_parameters()`, `init()`, and `on_candle()`, then be registered in the strategy registry used by `backtest_routes.py` and `signal_engine.py`.
+
+### Telegram notifications
+
+One shared bot per deployment. Each user links their own chat on first use:
+
+1. Frontend profile page calls `POST /api/profile/telegram/link-token` → backend generates a one-time token (15 min TTL) and returns a `https://t.me/<bot>?start=<token>` deep-link.
+2. User opens the link and sends `/start <token>` to the bot.
+3. Telegram POSTs the update to `/api/telegram/webhook/{secret}`; the webhook consumes the token and stores `telegram_chat_id` / `telegram_username` on the user row.
+
+Outbound alerts flow through a single entry point — `notifications.notify_event` — which live_tracker calls at four sites (entry fill, exit signal, intrabar stop, candle-close stop). The dispatcher filters by the per-config `telegram_enabled` toggle + the user's linked chat, and dedupes on `notification_log (event_type, reference_type, reference_id, channel)`. The whole subsystem is inert (no HTTP, no reply) whenever `TELEGRAM_BOT_TOKEN` is empty — this is the invariant that keeps tests and CI green without mocking the network.
 
 ## Key Environment Variables
 
@@ -105,6 +122,11 @@ New strategies must extend `backend/strategies/base.py::Strategy`, implement `ge
 | `KEYCLOAK_AUDIENCE` | `tradingtool-api` | JWT audience / API client ID |
 | `KEYCLOAK_FRONTEND_CLIENT_ID` | `tradingtool-web` | Returned to frontend via `/api/auth/config` |
 | `CORS_ORIGINS` | `*` | Comma-separated allowed origins |
+| `PUBLIC_BASE_URL` | `""` | Used to build "Ver trade" links in outbound Telegram messages |
+| `TELEGRAM_BOT_TOKEN` | `""` | Bot API token. **When empty, the whole Telegram subsystem is no-op** — tests and CI rely on this |
+| `TELEGRAM_BOT_USERNAME` | `""` | Bot username (no `@`); used to build the `https://t.me/<bot>?start=<token>` deep-link in link-token responses |
+| `TELEGRAM_WEBHOOK_SECRET` | `""` | Secret embedded in the webhook path and verified in the `X-Telegram-Bot-Api-Secret-Token` header |
+| `TELEGRAM_WEBHOOK_URL` | `""` | If set (together with the bot token), `setWebhook` is invoked once at app lifespan startup |
 
 Frontend-only (placed in `frontend/.env.development.local`, only needed to override dev defaults):
 `VITE_AUTH_ENABLED`, `VITE_KEYCLOAK_URL`, `VITE_KEYCLOAK_REALM`, `VITE_KEYCLOAK_CLIENT_ID`
