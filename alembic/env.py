@@ -13,7 +13,12 @@ from alembic import context
 config = context.config
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # disable_existing_loggers=False so Alembic's logging config does not
+    # silence uvicorn/app loggers when migrations run during the FastAPI
+    # lifespan. Default (True) would kill uvicorn.access, uvicorn.error and
+    # every `backend.*` logger the moment alembic.ini is loaded, which is
+    # why no access or app logs were reaching kubectl logs after startup.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = None
 
