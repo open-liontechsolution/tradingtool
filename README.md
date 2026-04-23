@@ -1,118 +1,102 @@
 # Trading Tools Laboratory
 
-Plataforma full-stack para **descargar datos históricos de Binance Spot**, almacenarlos en base de datos, calcular métricas técnicas, ejecutar **backtests** y operar un flujo de **señales + simulación/live tracking** desde una interfaz web en React.
+Plataforma full-stack para **descargar datos históricos de Binance Spot**, almacenarlos en base de datos, calcular métricas técnicas, ejecutar **backtests** y operar un flujo de **señales + simulación/live tracking** desde una interfaz web en React, con **alertas opcionales por Telegram**.
 
-## Qué incluye actualmente
+## Qué incluye
 
-### Novedades recientes (auth + scoping)
-
-- **Sistema de autenticación listo para Keycloak** con dos modos:
-  - **Modo mock/local (default)**: login automático de un usuario de desarrollo.
-  - **Modo real**: validación de JWT por JWKS y roles por cliente OIDC.
-- **Scoping por usuario** para señales:
-  - `signal_configs` ahora guarda `user_id`.
-  - Se añadió tabla `users` con auto-provisionado al primer login real.
-- **Autorización por rol en API**:
-  - Endpoints de **Data Manager** requieren rol admin.
-  - Endpoints de **Backtesting** y **Signals** requieren usuario autenticado.
-- **Frontend con proveedor de auth**:
-  - Integración OIDC (`oidc-client-ts`) para Keycloak.
-  - Pantalla de login cuando `AUTH_ENABLED=true`.
-  - Sesión mock cuando `AUTH_ENABLED=false`.
-
-- **Backend (FastAPI)** con API REST para:
+- **Backend (FastAPI, Python 3.13)** con API REST para:
   - Descarga asíncrona de velas históricas y seguimiento de progreso.
   - Consulta de velas y cobertura almacenada.
-  - Cálculo/persistencia de métricas derivadas.
+  - Cálculo y persistencia de métricas derivadas.
   - Ejecución y exportación de backtests.
   - Gestión de configuraciones de señales, señales generadas, `sim_trades` y `real_trades`.
-- **Motores en background al iniciar la app**:
-  - `run_signal_scanner()` para evaluar configuraciones activas y generar señales.
-  - `run_live_tracker()` para actualizar estado de operaciones simuladas en tiempo real.
+  - Vinculación de cuenta con Telegram y envío de alertas por bot.
+- **Motores en background** al iniciar la app:
+  - `run_signal_scanner()` evalúa configuraciones activas y genera señales.
+  - `run_live_tracker()` actualiza estado de operaciones simuladas con datos en tiempo real y emite notificaciones de entrada, salida y stop.
 - **Motor de backtesting** con curva de equity, trade log y resumen de performance.
-- **Registro de estrategias extensible** (actualmente: `breakout` y `support_resistance`).
-- **Frontend (React + Vite)** con tres módulos:
-  - **Data Manager**
+- **Registro de estrategias extensible** (actualmente `breakout` y `support_resistance`).
+- **Frontend (React 19 + Vite)** con cuatro módulos:
+  - **Data Manager** (admin)
   - **Backtesting**
   - **Signals**
+  - **Profile** (vinculación con Telegram)
+- **Autenticación Keycloak (OIDC)** con modo mock para desarrollo local.
+- **Scoping por usuario**: `signal_configs` se asocia al `user_id` del autenticado; todas las consultas y mutaciones se filtran.
 
 ## Arquitectura (visión general)
 
-- `backend/app.py`: inicializa FastAPI, CORS, rutas y tareas de background (scanner/tracker). También sirve `frontend/dist` si existe.
+- `backend/app.py`: inicializa FastAPI, CORS, rutas y tareas de background (scanner/tracker). Sirve `frontend/dist` si existe.
 - `backend/api/data_routes.py`: endpoints de datos, descarga y métricas.
 - `backend/api/backtest_routes.py`: endpoints de estrategias y backtesting.
-- `backend/api/signal_routes.py`: CRUD de signal configs, consulta de señales y manejo de sim/real trades.
+- `backend/api/signal_routes.py`: CRUD de `signal_configs`, señales y sim/real trades. Acepta `telegram_enabled` por configuración.
+- `backend/api/profile_routes.py`: estado y vinculación del chat de Telegram del usuario.
+- `backend/api/telegram_routes.py`: webhook público del bot de Telegram (autenticado con secret en path + header).
 - `backend/download_engine.py`: descarga en lotes desde Binance y upsert en DB.
-- `backend/metrics_engine.py`: cálculo de indicadores técnicos y guardado en `derived_metrics`.
+- `backend/metrics_engine.py`: cálculo de indicadores técnicos y persistencia en `derived_metrics`.
 - `backend/signal_engine.py`: evaluación de estrategias para emitir señales.
-- `backend/live_tracker.py`: seguimiento de señales/sim trades abiertos.
-- `backend/database.py`: capa de acceso unificada para SQLite y PostgreSQL.
-- `backend/auth.py`: autenticación/autorización (modo mock + validación JWT Keycloak).
+- `backend/live_tracker.py`: seguimiento de señales/sim trades abiertos; dispara notificaciones al cerrar ciclo.
+- `backend/notifications.py`: dispatcher único que decide destinatario, deduplica en `notification_log` y formatea mensajes.
+- `backend/telegram_client.py`: cliente fino del Bot API de Telegram (no-op si `TELEGRAM_BOT_TOKEN` está vacío).
+- `backend/database.py`: acceso unificado para SQLite (dev) y PostgreSQL (prod vía Alembic).
+- `backend/auth.py`: auth OIDC con Keycloak + modo mock cuando `AUTH_ENABLED=false`.
 - `frontend/`: SPA React con Vite y proxy `/api -> http://localhost:8000` en desarrollo.
+
+Más detalle para contribuir está en [CLAUDE.md](./CLAUDE.md).
 
 ## Requisitos
 
-- Python **3.11+** (recomendado)
-- Node.js **18+** (recomendado)
+- Python **3.13**
+- Node.js **22**
 - npm
 
 ## Configuración
 
-Variables de entorno relevantes:
+Variables de entorno relevantes. Las sensibles (token del bot, URL del webhook, etc.) deben ir en un secreto, nunca versionadas.
 
-- `DATABASE_URL` (opcional):
-  - Si **no** se define, se usa SQLite local.
-  - Si empieza por `postgresql://`, se usa PostgreSQL (schema vía Alembic).
-- `DB_PATH` (solo SQLite): ruta del archivo DB (default: `data/trading_tools.db`).
+### Base de datos
+
+- `DATABASE_URL`: si empieza por `postgresql://`, se usa PostgreSQL (schema vía Alembic). Si no está definida, se usa SQLite local.
+- `DB_PATH`: ruta del SQLite local (default `data/trading_tools.db`).
+
+### Servidor
+
 - `HOST` (default `0.0.0.0`), `PORT` (default `8000`), `LOG_LEVEL` (default `info`).
 - `CORS_ORIGINS` (default `*`, lista separada por comas).
+- `PUBLIC_BASE_URL`: URL pública de la app. La usa el dispatcher de notificaciones para construir el enlace "Ver trade" en los mensajes de Telegram.
 
-### Auth backend (FastAPI)
+### Auth backend (Keycloak)
 
-- `AUTH_ENABLED`:
-  - `false` (default) => modo local/mock.
-  - `true` => activa validación de JWT y control de acceso real.
+- `AUTH_ENABLED`: `false` (default) → modo mock local; `true` → validación real de JWT.
 - `KEYCLOAK_URL` (ej: `https://auth.midominio.com`)
 - `KEYCLOAK_REALM` (default `tradingtool-dev`)
 - `KEYCLOAK_AUDIENCE` (default `tradingtool-api`)
+- `KEYCLOAK_FRONTEND_CLIENT_ID` (default `tradingtool-web`) — se expone al frontend vía `/api/auth/config`.
 
-### Auth frontend (Vite)
+### Auth frontend (Vite, `frontend/.env.development.local`)
 
 - `VITE_AUTH_ENABLED` (default `false`)
 - `VITE_KEYCLOAK_URL`
 - `VITE_KEYCLOAK_REALM` (default `tradingtool-dev`)
 - `VITE_KEYCLOAK_CLIENT_ID` (default `tradingtool-web`)
 
-> Importante: para usar auth real, activa backend y frontend a la vez (`AUTH_ENABLED=true` y `VITE_AUTH_ENABLED=true`).
+> Para usar auth real activa backend y frontend a la vez (`AUTH_ENABLED=true` y `VITE_AUTH_ENABLED=true`).
 
-## Modo single-user con login mock (desarrollo local)
+### Notificaciones por Telegram (opcionales)
 
-Para correr la app como **single-user sin Keycloak**, usa la configuración por defecto:
+El subsistema es **totalmente inerte** si `TELEGRAM_BOT_TOKEN` está vacío: ni envía mensajes ni intenta registrar el webhook. Este es el comportamiento por defecto en dev y el que usan los tests / CI.
 
-- Backend: `AUTH_ENABLED=false`
-- Frontend: `VITE_AUTH_ENABLED=false`
+- `TELEGRAM_BOT_TOKEN` **(secreto)**: token del bot emitido por [@BotFather](https://t.me/BotFather).
+- `TELEGRAM_BOT_USERNAME`: username del bot sin la arroba (ej. `tradingtools_dev_bot`). Se usa para construir el deep-link `https://t.me/<bot>?start=<token>`.
+- `TELEGRAM_WEBHOOK_SECRET` **(secreto)**: cadena aleatoria — va en la URL del webhook y en la cabecera `X-Telegram-Bot-Api-Secret-Token` que Telegram echo-ea en cada POST.
+- `TELEGRAM_WEBHOOK_URL` **(secreto, porque contiene el secret)**: URL pública HTTPS completa del webhook, con el secret en la ruta. Si se define, al arrancar la app llama a `setWebhook`.
 
-Con esto:
+Flujo de vinculación:
 
-- No se requiere servidor de identidad.
-- Se inyecta un usuario mock (`dev-local-user`) con roles `app_user` + `app_admin`.
-- Puedes acceder a todos los módulos desde local sin flujo de login real.
-
-Este modo está pensado para desarrollo/QA rápido en entorno local, no para producción.
-
-## Modo auth real (Keycloak)
-
-Cuando quieras validar acceso real:
-
-1. Configura variables de entorno de backend y frontend.
-2. Activa ambos flags (`AUTH_ENABLED=true`, `VITE_AUTH_ENABLED=true`).
-3. Inicia sesión desde la pantalla "Sign in" del frontend.
-
-Al autenticar:
-
-- El backend valida firma/issuer/exp del token.
-- Se crean/actualizan datos del usuario en la tabla `users`.
-- Las configuraciones de señales quedan asociadas al usuario autenticado.
+1. El usuario pulsa **Vincular Telegram** en su perfil → backend emite un token de un solo uso (TTL 15 min).
+2. El usuario envía `/start <token>` al bot.
+3. El webhook consume el token y asocia el `chat_id` al usuario.
+4. A partir de ahí, cualquier `signal_config` con `telegram_enabled=true` envía alertas al chat en eventos de entrada, salida por estrategia o stop alcanzado.
 
 ## Puesta en marcha local
 
@@ -121,7 +105,7 @@ Al autenticar:
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 python run.py
 ```
 
@@ -137,17 +121,22 @@ npm install
 npm run dev
 ```
 
-Frontend disponible en `http://localhost:5173`.
+Frontend disponible en `http://localhost:5173` con proxy a `:8000`.
+
+### 3) Migraciones (solo PostgreSQL)
+
+En SQLite el esquema se crea inline al arrancar. En PostgreSQL se corren migraciones Alembic automáticamente en el lifespan, pero también puedes ejecutarlas a mano:
+
+```bash
+DATABASE_URL=postgresql://... alembic upgrade head
+```
 
 ## Build y despliegue unificado
 
 Para servir frontend + backend desde FastAPI:
 
 ```bash
-cd frontend
-npm install
-npm run build
-cd ..
+cd frontend && npm install && npm run build && cd ..
 python run.py
 ```
 
@@ -171,20 +160,16 @@ Si `frontend/dist` existe, FastAPI lo monta en `/` automáticamente.
 
 ### Backtesting (usuario autenticado)
 
-> Requieren usuario autenticado.
-
 - `GET /api/strategies`
 - `POST /api/backtest`
 - `GET /api/backtest/{backtest_id}`
 - `GET /api/backtest/{backtest_id}/export?format=json|csv`
 
-### Signals / Tracking (usuario autenticado)
+### Signals / Tracking (usuario autenticado, acotado al usuario)
 
-> Requieren usuario autenticado. Las consultas y mutaciones se acotan al usuario actual.
-
-- `POST /api/signals/configs`
+- `POST /api/signals/configs` — acepta `telegram_enabled`
 - `GET /api/signals/configs`
-- `PATCH /api/signals/configs/{config_id}`
+- `PATCH /api/signals/configs/{config_id}` — acepta `telegram_enabled`
 - `DELETE /api/signals/configs/{config_id}`
 - `GET /api/signals`
 - `GET /api/signals/status`
@@ -198,15 +183,24 @@ Si `frontend/dist` existe, FastAPI lo monta en `/` automáticamente.
 - `DELETE /api/real-trades/{trade_id}`
 - `GET /api/comparison/{sim_trade_id}`
 
+### Profile / Telegram (usuario autenticado)
+
+- `GET /api/profile/telegram` — estado de vinculación
+- `POST /api/profile/telegram/link-token` — genera deep-link con TTL 15 min
+- `DELETE /api/profile/telegram` — desvincula
+
+### Telegram webhook (público — auth vía secret)
+
+- `POST /api/telegram/webhook/{secret}` — consumido únicamente por Telegram Bot API.
+
+### Auth
+
+- `GET /api/auth/config` — público; devuelve la configuración OIDC que necesita el frontend.
+
 ## Estrategias actuales
 
-- `breakout`
-  - Ruptura por cierre de máximos/mínimos previos.
-  - Stop porcentual configurable.
-  - Salidas por ruptura contraria.
-- `support_resistance`
-  - Niveles de soporte/resistencia mediante zigzag sin lookahead.
-  - Entradas por quiebre y stops porcentuales.
+- `breakout`: ruptura por cierre de máximos/mínimos previos; stop porcentual; salida por ruptura contraria.
+- `support_resistance`: niveles de soporte/resistencia mediante zigzag sin lookahead; entradas por quiebre y stops porcentuales.
 
 ## Métricas derivadas disponibles
 
@@ -224,13 +218,20 @@ Si `frontend/dist` existe, FastAPI lo monta en `/` automáticamente.
 pytest -q
 ```
 
-El repositorio incluye tests unitarios en `tests/` para:
+Cubren:
 
 - descarga de datos
 - cálculo de métricas
 - engine de backtest
 - estrategias
 - live tracker y signal engine
+- cliente de Telegram, dispatcher de notificaciones y webhook
+
+## Despliegue
+
+- Imagen multi-stage (`Dockerfile`): Node 22 Alpine construye el frontend, Python 3.13-slim corre la app.
+- CD: push a `develop` → GitHub Actions publica imagen multi-arch en GHCR y actualiza `helm/env/dev.yaml` con el tag. Argo CD aplica el cambio al cluster k3s de dev.
+- Chart de Helm en `helm/`; valores sensibles viven en un `Secret` externo referenciado por `existingSecret`.
 
 ## Estructura rápida
 
@@ -239,21 +240,30 @@ backend/
   api/
   strategies/
   app.py
+  auth.py
   backtest_engine.py
-  download_engine.py
-  metrics_engine.py
-  signal_engine.py
-  live_tracker.py
   database.py
+  download_engine.py
+  live_tracker.py
+  metrics_engine.py
+  notifications.py
+  signal_engine.py
+  telegram_client.py
 frontend/
   src/components/
-run.py
-tests/
+  src/auth/
+helm/
+  env/
+  templates/
 alembic/
+  versions/
+tests/
+run.py
 requirements.txt
 ```
 
 ## Próximas mejoras sugeridas
 
 - Persistir resultados de backtests en DB (hoy viven en memoria por `backtest_id`).
-- Añadir Docker Compose para entorno reproducible (app + DB + frontend build).
+- Implementar trailing stops (issue específica abierta; el dispatcher de notificaciones ya reserva el evento `stop_moved`).
+- Observabilidad básica: métricas Prometheus + dashboard de latencias del live tracker.
