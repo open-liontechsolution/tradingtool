@@ -381,6 +381,19 @@ async def init_db() -> None:
             );
             CREATE INDEX IF NOT EXISTS idx_telegram_link_tokens_user
                 ON telegram_link_tokens (user_id);
+
+            CREATE TABLE IF NOT EXISTS sim_trade_stop_moves (
+                id                 INTEGER PRIMARY KEY,
+                sim_trade_id       INTEGER NOT NULL REFERENCES sim_trades(id) ON DELETE CASCADE,
+                prev_stop_base     REAL    NOT NULL,
+                new_stop_base      REAL    NOT NULL,
+                prev_stop_trigger  REAL    NOT NULL,
+                new_stop_trigger   REAL    NOT NULL,
+                candle_time        INTEGER NOT NULL,
+                created_at         TEXT    NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_sim_trade_stop_moves_trade
+                ON sim_trade_stop_moves (sim_trade_id);
         """)
         await db.commit()
 

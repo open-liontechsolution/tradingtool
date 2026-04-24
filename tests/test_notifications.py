@@ -278,3 +278,76 @@ async def test_unknown_event_type_is_rejected():
         )
 
     mock_send.assert_not_called()
+
+
+def test_format_stop_moved_renders_required_fields():
+    """The stop_moved formatter produces a message with prev/new stop levels and locked pct."""
+    from backend.notifications import _format_stop_moved
+
+    text = _format_stop_moved(
+        {
+            "symbol": "BTCUSDT",
+            "side": "long",
+            "interval": "1h",
+            "prev_stop": 95.12345,
+            "new_stop": 98.50000,
+            "locked_pct": 0.015,
+            "sim_trade_id": 42,
+        }
+    )
+
+    assert "Stop movido" in text
+    assert "BTCUSDT" in text
+    assert "95." in text
+    assert "98." in text
+    assert "Ganancia bloqueada" in text
+
+
+def test_format_stop_moved_omits_locked_pct_when_missing():
+    from backend.notifications import _format_stop_moved
+
+    text = _format_stop_moved(
+        {
+            "symbol": "BTCUSDT",
+            "side": "short",
+            "interval": "4h",
+            "prev_stop": 105.0,
+            "new_stop": 102.0,
+            "sim_trade_id": 7,
+        }
+    )
+    assert "Ganancia bloqueada" not in text
+
+
+@pytest.mark.asyncio
+async def test_stop_moved_event_goes_through_dispatcher():
+    """stop_moved is a recognised event: dispatcher writes to the log and sends Telegram."""
+    from backend.notifications import notify_event
+
+    await init_db()
+    user_id = await _insert_user(chat_id=12345, username="trader")
+    config_id = await _insert_config(user_id, telegram_enabled=True)
+
+    with (
+        patch("backend.notifications.send_message", new=AsyncMock(return_value=True)) as mock_send,
+        patch("backend.notifications.TELEGRAM_ENABLED", True),
+    ):
+        await notify_event(
+            event_type="stop_moved",
+            config_id=config_id,
+            reference_type="sim_trade_stop_move",
+            reference_id=1,
+            payload={
+                "symbol": "BTCUSDT",
+                "side": "long",
+                "interval": "1h",
+                "prev_stop": 95.0,
+                "new_stop": 98.0,
+                "locked_pct": 0.02,
+                "sim_trade_id": 1,
+            },
+        )
+
+    assert mock_send.call_count == 1
+    assert await _count_log("internal") == 1
+    assert await _count_log("telegram") == 1

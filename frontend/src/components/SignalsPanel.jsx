@@ -470,6 +470,33 @@ function SignalsList({ signals }) {
 
 /* ---- SimTrades table ---- */
 function SimTradesList({ trades, onClose }) {
+  const [expandedId, setExpandedId] = useState(null)
+  const [movesByTrade, setMovesByTrade] = useState({})
+  const [loadingMoves, setLoadingMoves] = useState(false)
+
+  const toggleExpand = useCallback(async (tradeId) => {
+    if (expandedId === tradeId) {
+      setExpandedId(null)
+      return
+    }
+    setExpandedId(tradeId)
+    if (movesByTrade[tradeId] !== undefined) return
+    setLoadingMoves(true)
+    try {
+      const res = await apiFetch(`/api/sim-trades/${tradeId}/stop-moves`)
+      if (res.ok) {
+        const data = await res.json()
+        setMovesByTrade(prev => ({ ...prev, [tradeId]: data.stop_moves ?? [] }))
+      } else {
+        setMovesByTrade(prev => ({ ...prev, [tradeId]: [] }))
+      }
+    } catch {
+      setMovesByTrade(prev => ({ ...prev, [tradeId]: [] }))
+    } finally {
+      setLoadingMoves(false)
+    }
+  }, [expandedId, movesByTrade])
+
   if (!trades || trades.length === 0) {
     return <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem', padding: 'var(--space-3)' }}>No sim trades yet.</div>
   }
@@ -478,6 +505,7 @@ function SimTradesList({ trades, onClose }) {
       <table className="trade-table">
         <thead>
           <tr>
+            <th style={{ width: '2rem' }}></th>
             <th className="ta-right">ID</th>
             <th>Config</th>
             <th>Symbol</th>
@@ -495,31 +523,91 @@ function SimTradesList({ trades, onClose }) {
         <tbody>
           {trades.map(t => {
             const pnlColor = t.pnl > 0 ? 'var(--color-success)' : t.pnl < 0 ? 'var(--color-danger)' : 'var(--text-secondary)'
+            const isExpanded = expandedId === t.id
+            const moves = movesByTrade[t.id]
             return (
-              <tr key={t.id}>
-                <td className="ta-right num-col" style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}>{t.id}</td>
-                <td>
-                  <ConfigBadge configId={t.config_id} strategy={t.config_strategy} params={t.config_params} />
-                </td>
-                <td>{t.symbol}</td>
-                <td style={{ color: t.side === 'long' ? 'var(--color-success)' : 'var(--color-danger)', fontWeight: 600 }}>
-                  {t.side?.toUpperCase()}
-                </td>
-                <td className="ta-right num-col">{t.entry_price ? fmtNum(t.entry_price, 4) : '—'}</td>
-                <td className="ta-right num-col">{fmtNum(t.stop_trigger, 4)}</td>
-                <td className="ta-right num-col">{t.exit_price ? fmtNum(t.exit_price, 4) : '—'}</td>
-                <td>{t.exit_reason || '—'}</td>
-                <td className="ta-right num-col" style={{ color: pnlColor, fontWeight: 600 }}>{t.pnl != null ? fmtMoney(t.pnl) : '—'}</td>
-                <td className="ta-right num-col" style={{ color: pnlColor }}>{t.pnl_pct != null ? fmtNum(t.pnl_pct * 100, 2) + '%' : '—'}</td>
-                <td><StatusBadge status={t.status} /></td>
-                <td className="ta-center">
-                  {t.status === 'open' && (
-                    <button className="btn btn-sm btn-secondary" onClick={() => onClose(t.id)}>Close</button>
-                  )}
-                </td>
-              </tr>
+              <React.Fragment key={t.id}>
+                <tr>
+                  <td className="ta-center">
+                    <button
+                      type="button"
+                      onClick={() => toggleExpand(t.id)}
+                      title="Show stop-move history"
+                      style={{
+                        background: 'transparent', border: 'none', cursor: 'pointer',
+                        color: 'var(--text-muted)', padding: '0.25rem',
+                      }}
+                    >{isExpanded ? '▾' : '▸'}</button>
+                  </td>
+                  <td className="ta-right num-col" style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}>{t.id}</td>
+                  <td>
+                    <ConfigBadge configId={t.config_id} strategy={t.config_strategy} params={t.config_params} />
+                  </td>
+                  <td>{t.symbol}</td>
+                  <td style={{ color: t.side === 'long' ? 'var(--color-success)' : 'var(--color-danger)', fontWeight: 600 }}>
+                    {t.side?.toUpperCase()}
+                  </td>
+                  <td className="ta-right num-col">{t.entry_price ? fmtNum(t.entry_price, 4) : '—'}</td>
+                  <td className="ta-right num-col">{fmtNum(t.stop_trigger, 4)}</td>
+                  <td className="ta-right num-col">{t.exit_price ? fmtNum(t.exit_price, 4) : '—'}</td>
+                  <td>{t.exit_reason || '—'}</td>
+                  <td className="ta-right num-col" style={{ color: pnlColor, fontWeight: 600 }}>{t.pnl != null ? fmtMoney(t.pnl) : '—'}</td>
+                  <td className="ta-right num-col" style={{ color: pnlColor }}>{t.pnl_pct != null ? fmtNum(t.pnl_pct * 100, 2) + '%' : '—'}</td>
+                  <td><StatusBadge status={t.status} /></td>
+                  <td className="ta-center">
+                    {t.status === 'open' && (
+                      <button className="btn btn-sm btn-secondary" onClick={() => onClose(t.id)}>Close</button>
+                    )}
+                  </td>
+                </tr>
+                {isExpanded && (
+                  <tr>
+                    <td colSpan={13} style={{ background: 'var(--surface-1)', padding: 'var(--space-3)' }}>
+                      <StopMovesDetail moves={moves} loading={loadingMoves && moves === undefined} />
+                    </td>
+                  </tr>
+                )}
+              </React.Fragment>
             )
           })}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function StopMovesDetail({ moves, loading }) {
+  if (loading) return <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Loading stop moves…</div>
+  if (!moves || moves.length === 0) {
+    return <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>No stop moves for this trade.</div>
+  }
+  return (
+    <div>
+      <div style={{ fontWeight: 600, marginBottom: 'var(--space-2)' }}>Stop moves ({moves.length})</div>
+      <table className="trade-table" style={{ fontSize: '0.8rem' }}>
+        <thead>
+          <tr>
+            <th className="ta-right">#</th>
+            <th className="ta-right">Prev base</th>
+            <th className="ta-right">New base</th>
+            <th className="ta-right">Prev trigger</th>
+            <th className="ta-right">New trigger</th>
+            <th className="ta-right">Candle time</th>
+            <th>Created at</th>
+          </tr>
+        </thead>
+        <tbody>
+          {moves.map((m, i) => (
+            <tr key={m.id}>
+              <td className="ta-right num-col">{i + 1}</td>
+              <td className="ta-right num-col">{fmtNum(m.prev_stop_base, 4)}</td>
+              <td className="ta-right num-col">{fmtNum(m.new_stop_base, 4)}</td>
+              <td className="ta-right num-col">{fmtNum(m.prev_stop_trigger, 4)}</td>
+              <td className="ta-right num-col">{fmtNum(m.new_stop_trigger, 4)}</td>
+              <td className="ta-right num-col">{new Date(m.candle_time).toISOString().replace('T', ' ').slice(0, 19)}</td>
+              <td>{m.created_at}</td>
+            </tr>
+          ))}
         </tbody>
       </table>
     </div>

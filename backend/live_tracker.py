@@ -344,6 +344,118 @@ async def _check_intrabar_stops() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Stop-move handling (trailing stop)
+# ---------------------------------------------------------------------------
+
+
+async def _apply_stop_moves(
+    trade: dict,
+    signals: list,
+    candle_open_time: int,
+    state: PositionState,
+) -> None:
+    """Apply every ``move_stop`` signal against the open trade.
+
+    For each accepted move: tighten stop_base/stop_trigger on sim_trades, append a
+    row to sim_trade_stop_moves, mirror it onto ``state`` so later exit checks in
+    the same candle see the updated value, and emit a notify_event.
+
+    Rejects any move that would loosen the stop (long: new <= current base;
+    short: new >= current base). Honours stop_cross_pct buffer — same formula as
+    at entry fill, so the intrabar poller and candle-close strategy view stay
+    aligned.
+    """
+    # Collect only tightening move_stop signals with a positive level.
+    moves = [s for s in signals if getattr(s, "action", None) == "move_stop" and s.stop_price > 0]
+    if not moves:
+        return
+
+    side = trade["side"]
+    stop_cross_pct = float(trade.get("stop_cross_pct") or 0.0)
+    buffer_sign = -1.0 if side == "long" else 1.0
+
+    now = _now_iso()
+    for sig in moves:
+        prev_base = float(trade["stop_base"])
+        prev_trigger = float(trade["stop_trigger"])
+        new_base = float(sig.stop_price)
+
+        tightens = (side == "long" and new_base > prev_base) or (side == "short" and new_base < prev_base)
+        if not tightens:
+            logger.warning(
+                "SimTrade %d move_stop ignored (loosens stop): side=%s prev=%.6f new=%.6f",
+                trade["id"],
+                side,
+                prev_base,
+                new_base,
+            )
+            continue
+
+        new_trigger = new_base * (1.0 + buffer_sign * stop_cross_pct)
+
+        async with get_db() as db:
+            await db.execute(
+                """UPDATE sim_trades
+                   SET stop_base = ?, stop_trigger = ?, updated_at = ?
+                   WHERE id = ?""",
+                (new_base, new_trigger, now, trade["id"]),
+            )
+            cursor = await db.execute(
+                """INSERT INTO sim_trade_stop_moves
+                       (sim_trade_id, prev_stop_base, new_stop_base,
+                        prev_stop_trigger, new_stop_trigger, candle_time, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    trade["id"],
+                    prev_base,
+                    new_base,
+                    prev_trigger,
+                    new_trigger,
+                    candle_open_time,
+                    now,
+                ),
+            )
+            move_id = cursor.lastrowid
+            await db.commit()
+
+        # Mirror onto in-memory trade + PositionState so subsequent signals align.
+        trade["stop_base"] = new_base
+        trade["stop_trigger"] = new_trigger
+        state.stop_price = new_trigger
+
+        entry_price = float(trade["entry_price"]) if trade.get("entry_price") else 0.0
+        locked_pct: float | None = None
+        if entry_price > 0:
+            raw = (new_base - entry_price) / entry_price
+            locked_pct = raw if side == "long" else -raw
+
+        await notify_event(
+            event_type="stop_moved",
+            config_id=trade["config_id"],
+            reference_type="sim_trade_stop_move",
+            reference_id=int(move_id) if move_id is not None else trade["id"],
+            payload={
+                "symbol": trade["symbol"],
+                "interval": trade["interval"],
+                "side": side,
+                "prev_stop": prev_base,
+                "new_stop": new_base,
+                "locked_pct": locked_pct,
+                "sim_trade_id": trade["id"],
+            },
+        )
+
+        logger.info(
+            "SimTrade %d STOP MOVED: side=%s %.6f -> %.6f (trigger %.6f)",
+            trade["id"],
+            side,
+            prev_base,
+            new_base,
+            new_trigger,
+        )
+
+
+# ---------------------------------------------------------------------------
 # Candle-close exit check
 # ---------------------------------------------------------------------------
 
@@ -438,6 +550,9 @@ async def _check_candle_close_exits(interval: str | None = None) -> None:
             )
 
             signals = strategy.on_candle(t_last, candle, state)
+
+            # Apply stop-moves first so a same-candle exit uses the updated stop.
+            await _apply_stop_moves(trade, signals, int(candle["open_time"]), state)
 
             for sig in signals:
                 if sig.action in ("exit_long", "exit_short"):

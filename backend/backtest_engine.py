@@ -105,6 +105,16 @@ async def run_backtest(
         # Get signals from strategy
         signals = strategy.on_candle(t, candle, state)
 
+        # Apply stop-moves first so a same-candle exit uses the updated stop.
+        for sig in signals:
+            if sig.action != "move_stop" or state.side == "flat" or sig.stop_price <= 0:
+                continue
+            tightens = (state.side == "long" and sig.stop_price > state.stop_price) or (
+                state.side == "short" and sig.stop_price < state.stop_price
+            )
+            if tightens:
+                state.stop_price = sig.stop_price
+
         exit_executed = False
         for sig in signals:
             if sig.action in ("stop_long", "stop_short", "exit_long", "exit_short") and state.side != "flat":

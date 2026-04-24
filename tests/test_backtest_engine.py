@@ -298,3 +298,132 @@ async def test_summary_metrics_present(monkeypatch):
     )
     required_keys = {"net_profit", "net_profit_pct", "max_drawdown_pct", "sharpe", "n_trades", "win_rate_pct"}
     assert required_keys.issubset(set(result.summary.keys()))
+
+
+# ---------------------------------------------------------------------------
+# move_stop handling in backtest
+# ---------------------------------------------------------------------------
+
+
+class _ScriptedStrategy:
+    """Minimal strategy stub used to drive exact signals into the backtest loop."""
+
+    name = "scripted"
+    description = "scripted signals (test only)"
+
+    def __init__(self, scripted):
+        self._scripted = scripted
+
+    def get_parameters(self):
+        return []
+
+    def init(self, params, candles):
+        return None
+
+    def on_candle(self, t, candle, state):
+        return list(self._scripted(t, candle, state))
+
+
+def _patch_strategy(monkeypatch, scripted):
+    """Register a scripted strategy as 'breakout' for the duration of the test."""
+    from backend.strategies import _REGISTRY
+
+    class _Factory:
+        name = "scripted"
+
+        def __new__(cls):
+            return _ScriptedStrategy(scripted)
+
+    monkeypatch.setitem(_REGISTRY, "scripted", _Factory)
+
+
+@pytest.mark.asyncio
+async def test_backtest_applies_move_stop(monkeypatch):
+    """A move_stop signal must tighten state.stop_price without closing the trade,
+    and a subsequent stop_long must exit at the updated level."""
+    from backend.strategies.base import Signal
+
+    step = INTERVAL_MS["1d"]
+    # 6 flat candles around price 100, then a plunge that triggers the stop.
+    candles = [
+        _make_row(step * 0, 100, 101, 99, 100),
+        _make_row(step * 1, 100, 101, 99, 100),
+        _make_row(step * 2, 100, 101, 99, 100),
+        _make_row(step * 3, 100, 101, 99, 100),
+        _make_row(step * 4, 100, 101, 80, 85),  # low 80 triggers stop
+        _make_row(step * 5, 85, 86, 84, 85),
+    ]
+    _patch_candles(monkeypatch, candles)
+
+    def script(t, candle, state):
+        # Enter long at t=0 with stop=90
+        if t == 0 and state.side == "flat":
+            return [Signal(action="entry_long", price=100.0, stop_price=90.0)]
+        # Move stop up to 95 at t=2
+        if t == 2 and state.side == "long":
+            return [Signal(action="move_stop", stop_price=95.0)]
+        # At t=4 the low (80) is below the new stop (95), so emit stop_long at the new level
+        if t == 4 and state.side == "long" and float(candle["low"]) <= state.stop_price:
+            return [Signal(action="stop_long", price=state.stop_price)]
+        return []
+
+    _patch_strategy(monkeypatch, script)
+
+    result = await run_backtest(
+        symbol="BTCUSDT",
+        interval="1d",
+        start_ms=0,
+        end_ms=step * 6,
+        strategy_name="scripted",
+        params={"modo_ejecucion": "close_current"},
+        initial_capital=10_000.0,
+    )
+
+    assert result.error is None
+    assert len(result.trade_log) == 1
+    trade = result.trade_log[0]
+    assert trade["exit_reason"] == "stop_long"
+    # Exit should happen at the tightened stop (95), not the initial stop (90).
+    assert trade["exit_price"] == pytest.approx(95.0, abs=0.5)
+
+
+@pytest.mark.asyncio
+async def test_backtest_rejects_loosening_move_stop(monkeypatch):
+    """A move_stop that loosens the stop must be ignored."""
+    from backend.strategies.base import Signal
+
+    step = INTERVAL_MS["1d"]
+    candles = [
+        _make_row(step * 0, 100, 101, 99, 100),
+        _make_row(step * 1, 100, 101, 99, 100),
+        _make_row(step * 2, 100, 101, 88, 90),  # low 88 — below 90 (initial) but above any looser stop
+        _make_row(step * 3, 90, 91, 89, 90),
+    ]
+    _patch_candles(monkeypatch, candles)
+
+    def script(t, candle, state):
+        if t == 0 and state.side == "flat":
+            return [Signal(action="entry_long", price=100.0, stop_price=90.0)]
+        # Try to loosen: move stop down from 90 to 80 — must be ignored.
+        if t == 1 and state.side == "long":
+            return [Signal(action="move_stop", stop_price=80.0)]
+        # At t=2, low 88 is below initial stop (90), so stop fires at 90.
+        if t == 2 and state.side == "long" and float(candle["low"]) <= state.stop_price:
+            return [Signal(action="stop_long", price=state.stop_price)]
+        return []
+
+    _patch_strategy(monkeypatch, script)
+
+    result = await run_backtest(
+        symbol="BTCUSDT",
+        interval="1d",
+        start_ms=0,
+        end_ms=step * 4,
+        strategy_name="scripted",
+        params={"modo_ejecucion": "close_current"},
+        initial_capital=10_000.0,
+    )
+
+    assert len(result.trade_log) == 1
+    # Exit at the original stop (90), proving the loosening move was ignored.
+    assert result.trade_log[0]["exit_price"] == pytest.approx(90.0, abs=0.5)

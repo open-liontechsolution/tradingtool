@@ -62,11 +62,13 @@ DATABASE_URL=postgresql://... alembic upgrade head
 | `backtest_metrics.py` | Computes performance stats (Sharpe, drawdown, win-rate, etc.) from a trade log |
 | `signal_engine.py` | Background loop: polls active `signal_configs`, calls `ensure_candles`, runs `strategy.on_candle()`, persists signals, spawns sim trades |
 | `live_tracker.py` | Background loop: updates open `sim_trades` (entry fills, stop-outs, exits) from live Binance ticker price; emits user-facing notifications via `notifications.notify_event` |
-| `notifications.py` | Unified dispatcher for user-facing trade events. Resolves the recipient from `signal_configs.user_id`, honours the per-config `telegram_enabled` toggle, dedupes through `notification_log (event_type, reference_type, reference_id, channel)` and sends Telegram when all gates pass. Supported event types: `entry`, `exit_signal`, `stop_hit`, `stop_moved` (reserved for trailing-stop feature — see corresponding GitHub issue) |
+| `notifications.py` | Unified dispatcher for user-facing trade events. Resolves the recipient from `signal_configs.user_id`, honours the per-config `telegram_enabled` toggle, dedupes through `notification_log (event_type, reference_type, reference_id, channel)` and sends Telegram when all gates pass. Supported event types: `entry`, `exit_signal`, `stop_hit`, `stop_moved`. Note that `stop_moved` uses `reference_type="sim_trade_stop_move"` + `reference_id=sim_trade_stop_moves.id` so each trailing move is a distinct dedup key (many moves per trade are expected) |
 | `telegram_client.py` | Thin async Telegram Bot API client (`send_message`, `set_webhook`, MarkdownV2 `escape_md`). No-op when `TELEGRAM_BOT_TOKEN` is unset — safe default for tests and CI |
 | `strategies/base.py` | `Strategy` ABC: defines `get_parameters()`, `init()`, `on_candle()` interface shared by all strategies |
 | `strategies/breakout.py` | Breakout strategy implementation |
+| `strategies/breakout_trailing.py` | Breakout variant that inherits from `BreakoutStrategy` and emits `move_stop` using a rolling Min/Max trailing reference |
 | `strategies/support_resistance.py` | Support/resistance strategy implementation |
+| `strategies/support_resistance_trailing.py` | Support/resistance variant that inherits from `SupportResistanceStrategy` and emits `move_stop` from the latest confirmed zigzag level |
 | `api/data_routes.py` | `/api/pairs`, `/api/download`, `/api/candles`, `/api/metrics`, ... |
 | `api/backtest_routes.py` | `/api/strategies`, `/api/backtest` |
 | `api/signal_routes.py` | `/api/signals`, `/api/sim-trades`, `/api/real-trades`. `signal_configs` payloads accept `telegram_enabled` on create/patch |
@@ -92,7 +94,7 @@ Two modes selected by the `DATABASE_URL` env var:
 - **SQLite (default/dev):** schema created inline by `init_db()`, file at `data/trading_tools.db`. Additive migrations use `PRAGMA table_info` + `ALTER TABLE` guards.
 - **PostgreSQL (prod):** Alembic runs automatically at startup. Migrations in `alembic/versions/`.
 
-Core tables: `klines`, `download_jobs`, `derived_metrics`, `users`, `signal_configs`, `signals`, `sim_trades`, `real_trades`, `notification_log`, `telegram_link_tokens`.
+Core tables: `klines`, `download_jobs`, `derived_metrics`, `users`, `signal_configs`, `signals`, `sim_trades`, `sim_trade_stop_moves`, `real_trades`, `notification_log`, `telegram_link_tokens`.
 
 Keep the inline SQLite migration in `init_db()` and the Alembic revision in lockstep — both must produce the same final schema. Any new column/table lands in both or neither.
 
@@ -108,11 +110,12 @@ One shared bot per deployment. Each user links their own chat on first use:
 2. User opens the link and sends `/start <token>` to the bot.
 3. Telegram POSTs the update to `/api/telegram/webhook/{secret}`; the webhook consumes the token and stores `telegram_chat_id` / `telegram_username` on the user row.
 
-Outbound alerts flow through a single entry point — `notifications.notify_event` — which live_tracker calls at four sites (entry fill, exit signal, intrabar stop, candle-close stop). The dispatcher filters by the per-config `telegram_enabled` toggle + the user's linked chat, and dedupes on `notification_log (event_type, reference_type, reference_id, channel)`. The whole subsystem is inert (no HTTP, no reply) whenever `TELEGRAM_BOT_TOKEN` is empty — this is the invariant that keeps tests and CI green without mocking the network.
+Outbound alerts flow through a single entry point — `notifications.notify_event` — which live_tracker calls at five sites (entry fill, exit signal, intrabar stop, candle-close stop, trailing stop move). The dispatcher filters by the per-config `telegram_enabled` toggle + the user's linked chat, and dedupes on `notification_log (event_type, reference_type, reference_id, channel)`. The whole subsystem is inert (no HTTP, no reply) whenever `TELEGRAM_BOT_TOKEN` is empty — this is the invariant that keeps tests and CI green without mocking the network.
 ### Live-mode invariants
 
 - **Sim-trade lifecycle**: `pending_entry` → `open` → `closed`. On close, `exit_reason` ∈ `{stop_intrabar, stop_candle, exit_signal, manual, config_deleted}`.
 - **Stop levels**: `stop_base` is the strategy's raw stop. `stop_trigger = stop_base × (1 − stop_cross_pct)` for longs, `× (1 + stop_cross_pct)` for shorts. Both the intrabar ticker check and the candle-close strategy state use `stop_trigger` so the two paths fire at the same price.
+- **Trailing stop (`move_stop`)**: strategies may emit `Signal(action="move_stop", stop_price=<new_base>)`. `live_tracker._apply_stop_moves` accepts the move only if it *tightens* the stop (long: new base > current; short: new base < current); loosening moves are logged and ignored. On accept, `stop_base` and `stop_trigger` on `sim_trades` are updated together using the same `stop_cross_pct` formula as at entry, and a row is appended to `sim_trade_stop_moves` for audit. The `notify_event(event_type="stop_moved", ...)` call uses `reference_type="sim_trade_stop_move"` + `reference_id=sim_trade_stop_moves.id` so multiple moves per trade don't collide on the dedup index. In the backtest loop, `move_stop` simply updates `state.stop_price` — no history row (the trade_log still captures the eventual exit).
 - **Entry fill semantics (`modo_ejecucion`)**: `_fill_pending_entries` mirrors backtest. `open_next` (default): entry price is the open of the candle after the trigger and `entry_time = trigger_candle_time + step_ms`. `close_current`: entry price is the close of the trigger candle itself and `entry_time = trigger_candle_time`. Unknown/missing values fall back to `open_next` so legacy configs keep working.
 
 ## Key Environment Variables
