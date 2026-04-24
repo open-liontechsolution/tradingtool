@@ -54,6 +54,7 @@ helm/env/secrets.yaml
 
 # Claude
 .claude
+.mcp.json
 
 # Playwright CLI local session artifacts
 .playwright/

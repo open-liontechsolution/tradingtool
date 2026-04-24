@@ -624,6 +624,8 @@ function RealTradesSection() {
   const [loading, setLoading] = useState(false)
   const [closingId, setClosingId] = useState(null)
   const [closeForm, setCloseForm] = useState({ exit_price: '', pnl: '', exit_time: '', notes: '' })
+  const [closeError, setCloseError] = useState(null)
+  const [justClosedId, setJustClosedId] = useState(null)
 
   const fetchRealTrades = useCallback(async () => {
     try {
@@ -665,25 +667,32 @@ function RealTradesSection() {
     setLoading(false)
   }
 
-  const computeFees = (trade) => {
+  const FEE_WARN_PCT = 0.05
+
+  const computeCloseSummary = (trade) => {
     const exitPrice = parseFloat(closeForm.exit_price)
     const netPnl = parseFloat(closeForm.pnl)
-    if (isNaN(exitPrice) || isNaN(netPnl)) return null
     const qty = parseFloat(trade.quantity)
     const entry = parseFloat(trade.entry_price)
-    const grossPnl = trade.side === 'long' ? qty * (exitPrice - entry) : qty * (entry - exitPrice)
-    return Math.max(0, grossPnl - netPnl)
+    if ([exitPrice, netPnl, qty, entry].some(v => !Number.isFinite(v))) return null
+    const invested = qty * entry
+    const gross = trade.side === 'long' ? qty * (exitPrice - entry) : qty * (entry - exitPrice)
+    const fee = gross - netPnl
+    const feePct = invested > 0 ? Math.abs(fee) / invested : 0
+    const warn = fee < 0 || feePct > FEE_WARN_PCT
+    return { invested, gross, netPnl, fee, feePct, warn }
   }
 
   const handleClose = async (trade) => {
     setLoading(true)
+    setCloseError(null)
     try {
-      const fees = computeFees(trade)
+      const s = computeCloseSummary(trade)
       const body = {
         exit_price: parseFloat(closeForm.exit_price),
         exit_time: closeForm.exit_time || new Date().toISOString(),
         pnl: parseFloat(closeForm.pnl),
-        fees: fees ?? 0,
+        fees: s?.fee ?? 0,
         status: 'closed',
       }
       if (closeForm.notes) body.notes = closeForm.notes
@@ -692,18 +701,28 @@ function RealTradesSection() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       })
-      if (res.ok) {
-        setClosingId(null)
-        setCloseForm({ exit_price: '', pnl: '', exit_time: '', notes: '' })
-        fetchRealTrades()
+      if (!res.ok) {
+        let detail = `HTTP ${res.status}`
+        try { const j = await res.json(); if (j?.detail) detail = j.detail } catch { /* non-JSON body */ }
+        setCloseError(`Close failed: ${detail}`)
+        return
       }
-    } catch { /* ignore */ }
-    setLoading(false)
+      await fetchRealTrades()
+      setClosingId(null)
+      setCloseForm({ exit_price: '', pnl: '', exit_time: '', notes: '' })
+      setJustClosedId(trade.id)
+      setTimeout(() => setJustClosedId(prev => (prev === trade.id ? null : prev)), 1500)
+    } catch (e) {
+      setCloseError(e?.message || 'Network error closing trade')
+    } finally {
+      setLoading(false)
+    }
   }
 
   const openCloseForm = (trade) => {
     setClosingId(trade.id)
     setCloseForm({ exit_price: '', pnl: '', exit_time: '', notes: '' })
+    setCloseError(null)
   }
 
   return (
@@ -791,7 +810,10 @@ function RealTradesSection() {
                 const pnlColor = t.pnl > 0 ? 'var(--color-success)' : t.pnl < 0 ? 'var(--color-danger)' : 'var(--text-secondary)'
                 return (
                   <React.Fragment key={t.id}>
-                  <tr>
+                  <tr style={{
+                    transition: 'background 300ms ease',
+                    background: t.id === justClosedId ? 'rgba(34,197,94,0.18)' : undefined,
+                  }}>
                     <td className="ta-right num-col" style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}>{t.id}</td>
                     <td className="ta-right num-col">{t.sim_trade_id || '—'}</td>
                     <td>{t.symbol}</td>
@@ -822,7 +844,7 @@ function RealTradesSection() {
                     </td>
                   </tr>
                   {closingId === t.id && (() => {
-                    const fees = computeFees(t)
+                    const s = computeCloseSummary(t)
                     return (
                       <tr key={`close-${t.id}`} style={{ background: 'var(--bg-elevated)' }}>
                         <td colSpan={11} style={{ padding: 'var(--space-3)' }}>
@@ -840,11 +862,6 @@ function RealTradesSection() {
                                 onChange={e => setCloseForm(prev => ({ ...prev, pnl: e.target.value }))} />
                             </div>
                             <div className="form-group" style={{ marginBottom: 0 }}>
-                              <label className="form-label" style={{ fontSize: '0.75rem' }}>Fees (auto)</label>
-                              <input type="text" className="form-control" readOnly style={{ width: 100, opacity: 0.7 }}
-                                value={fees != null ? fees.toFixed(2) : '—'} />
-                            </div>
-                            <div className="form-group" style={{ marginBottom: 0 }}>
                               <label className="form-label" style={{ fontSize: '0.75rem' }}>Exit Time</label>
                               <input type="datetime-local" className="form-control" style={{ width: 190 }}
                                 value={closeForm.exit_time}
@@ -859,9 +876,40 @@ function RealTradesSection() {
                             <button className="btn btn-sm btn-primary" onClick={() => handleClose(t)}
                               disabled={loading || !closeForm.exit_price || !closeForm.pnl}
                               style={{ fontSize: '0.75rem' }}>
-                              Confirm Close
+                              {loading ? 'Closing…' : 'Confirm Close'}
                             </button>
                           </div>
+                          {s && (
+                            <div style={{ marginTop: 'var(--space-2)', display: 'flex', gap: 'var(--space-4)',
+                                          flexWrap: 'wrap', fontSize: '0.8rem',
+                                          fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)' }}>
+                              <span>Invertido: {fmtMoney(s.invested)}</span>
+                              <span>Gross: {fmtMoney(s.gross)}</span>
+                              <span style={{ color: s.warn ? 'var(--color-warning)' : undefined }}>
+                                Fee: {fmtMoney(s.fee)} ({(s.feePct * 100).toFixed(2)}%)
+                              </span>
+                            </div>
+                          )}
+                          {s?.warn && (
+                            <div style={{ marginTop: 'var(--space-2)', padding: '6px 10px',
+                                          background: 'rgba(234,179,8,0.1)',
+                                          border: '1px solid rgba(234,179,8,0.25)',
+                                          borderRadius: 'var(--radius-sm)',
+                                          color: 'var(--color-warning)', fontSize: '0.8rem' }}>
+                              {s.fee < 0
+                                ? 'Fee negativo: el Net PnL que has puesto es mayor que el Gross teórico — revisa el signo o la escala.'
+                                : `Fee = ${(s.feePct * 100).toFixed(2)}% del invertido: inusualmente alto. Revisa el Net PnL.`}
+                            </div>
+                          )}
+                          {closeError && (
+                            <div style={{ marginTop: 'var(--space-2)', padding: '6px 10px',
+                                          background: 'rgba(239,68,68,0.1)',
+                                          border: '1px solid rgba(239,68,68,0.25)',
+                                          borderRadius: 'var(--radius-sm)',
+                                          color: 'var(--color-danger)', fontSize: '0.8rem' }}>
+                              {closeError}
+                            </div>
+                          )}
                         </td>
                       </tr>
                     )
