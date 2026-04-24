@@ -91,11 +91,23 @@ class _PgConnection:
         self._last_id: int | None = None
 
     async def execute(self, query: str, params: tuple | list = ()) -> _PgCursor:
+        import asyncpg  # noqa: PLC0415
+
         pg_query = _to_pg_placeholders(query)
         q_upper = query.strip().upper()
         if q_upper.startswith("INSERT") and "RETURNING" not in q_upper:
-            pg_query = pg_query.rstrip().rstrip(";") + " RETURNING id"
-            row = await self._conn.fetchrow(pg_query, *params)
+            # Most tables have an auto-increment `id` column, so appending
+            # RETURNING id lets callers read `cursor.lastrowid` (aiosqlite
+            # parity). A few tables (e.g. telegram_link_tokens) key on a text
+            # PK and have no `id`; asyncpg raises UndefinedColumnError at
+            # prepare-time (nothing applied) — fall back to a plain insert.
+            augmented = pg_query.rstrip().rstrip(";") + " RETURNING id"
+            try:
+                row = await self._conn.fetchrow(augmented, *params)
+            except asyncpg.exceptions.UndefinedColumnError:
+                self._last_id = None
+                await self._conn.execute(pg_query, *params)
+                return _PgCursor([], None)
             self._last_id = row["id"] if row else None
             return _PgCursor([], self._last_id)
         rows = await self._conn.fetch(pg_query, *params)
