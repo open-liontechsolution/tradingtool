@@ -113,6 +113,7 @@ Outbound alerts flow through a single entry point — `notifications.notify_even
 
 - **Sim-trade lifecycle**: `pending_entry` → `open` → `closed`. On close, `exit_reason` ∈ `{stop_intrabar, stop_candle, exit_signal, manual, config_deleted}`.
 - **Stop levels**: `stop_base` is the strategy's raw stop. `stop_trigger = stop_base × (1 − stop_cross_pct)` for longs, `× (1 + stop_cross_pct)` for shorts. Both the intrabar ticker check and the candle-close strategy state use `stop_trigger` so the two paths fire at the same price.
+- **Entry fill semantics (`modo_ejecucion`)**: `_fill_pending_entries` mirrors backtest. `open_next` (default): entry price is the open of the candle after the trigger and `entry_time = trigger_candle_time + step_ms`. `close_current`: entry price is the close of the trigger candle itself and `entry_time = trigger_candle_time`. Unknown/missing values fall back to `open_next` so legacy configs keep working.
 
 ## Key Environment Variables
 
