@@ -78,10 +78,13 @@ async def create_link_token(user: AuthUser = Depends(get_current_user)) -> dict:
             "DELETE FROM telegram_link_tokens WHERE user_id = ? AND used_at IS NULL",
             (user.id,),
         )
+        # Explicit RETURNING: this table's PK is `token` (no `id` column),
+        # so the PG wrapper must not auto-append its default `RETURNING id`.
         await db.execute(
             """INSERT INTO telegram_link_tokens
                 (token, user_id, created_at, expires_at)
-               VALUES (?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?)
+               RETURNING token""",
             (token, user.id, now.isoformat(), expires.isoformat()),
         )
         await db.commit()
