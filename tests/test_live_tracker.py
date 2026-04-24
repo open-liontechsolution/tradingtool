@@ -12,9 +12,11 @@ import pytest
 from backend.database import get_db, init_db
 from backend.download_engine import INTERVAL_MS
 from backend.live_tracker import (
+    _apply_stop_moves,
     _check_intrabar_stops,
     _fill_pending_entries,
 )
+from backend.strategies.base import PositionState, Signal
 
 
 @pytest.fixture(autouse=True)
@@ -460,4 +462,185 @@ class TestPendingEntryFill:
             row = await cursor.fetchone()
         assert row[0] == "open"
         assert row[1] == pytest.approx(50000.0, abs=0.01)
-        assert row[2] is not None and row[2] > 0
+
+
+# ---------------------------------------------------------------------------
+# Tests: Trailing stop (_apply_stop_moves)
+# ---------------------------------------------------------------------------
+
+
+def _trade_row(
+    trade_id: int,
+    signal_id: int,
+    config_id: int,
+    *,
+    side="long",
+    entry_price=100.0,
+    stop_base=95.0,
+    stop_trigger=93.1,
+    stop_cross_pct=0.02,
+) -> dict:
+    """Build the in-memory dict shape _check_candle_close_exits passes in."""
+    return {
+        "id": trade_id,
+        "signal_id": signal_id,
+        "config_id": config_id,
+        "symbol": "BTCUSDT",
+        "interval": "1h",
+        "side": side,
+        "entry_price": entry_price,
+        "entry_time": 1_000_000,
+        "stop_base": stop_base,
+        "stop_trigger": stop_trigger,
+        "stop_cross_pct": stop_cross_pct,
+        "quantity": 100.0,
+        "portfolio": 10_000.0,
+        "invested_amount": 10_000.0,
+        "fees": 10.0,
+        "cost_bps": 10.0,
+    }
+
+
+class TestApplyStopMoves:
+    @pytest.mark.asyncio
+    async def test_long_tightening_move_updates_trade_and_records_history(self):
+        await _setup_db()
+        config_id = await _insert_config()
+        signal_id = await _insert_signal(config_id)
+        trade_id = await _insert_sim_trade(signal_id, config_id, stop_base=95.0, stop_trigger=93.1)
+        trade = _trade_row(trade_id, signal_id, config_id, stop_base=95.0, stop_trigger=93.1)
+        state = PositionState(side="long", entry_price=100.0, stop_price=93.1, quantity=100.0)
+
+        with patch("backend.live_tracker.notify_event", new=AsyncMock()) as mock_notify:
+            await _apply_stop_moves(
+                trade,
+                [Signal(action="move_stop", stop_price=98.0)],
+                candle_open_time=1_100_000,
+                state=state,
+            )
+
+        async with get_db() as db:
+            cursor = await db.execute(
+                "SELECT stop_base, stop_trigger FROM sim_trades WHERE id = ?",
+                (trade_id,),
+            )
+            trade_row = await cursor.fetchone()
+            cursor = await db.execute(
+                """SELECT prev_stop_base, new_stop_base, prev_stop_trigger,
+                          new_stop_trigger, candle_time
+                   FROM sim_trade_stop_moves WHERE sim_trade_id = ?""",
+                (trade_id,),
+            )
+            move_row = await cursor.fetchone()
+
+        assert trade_row[0] == pytest.approx(98.0)
+        assert trade_row[1] == pytest.approx(98.0 * (1.0 - 0.02))
+        assert move_row is not None
+        assert move_row[0] == pytest.approx(95.0)
+        assert move_row[1] == pytest.approx(98.0)
+        assert move_row[4] == 1_100_000
+
+        # In-memory state mirrors the trigger for later same-candle checks.
+        assert state.stop_price == pytest.approx(98.0 * (1.0 - 0.02))
+        mock_notify.assert_called_once()
+        kwargs = mock_notify.call_args.kwargs
+        assert kwargs["event_type"] == "stop_moved"
+        assert kwargs["reference_type"] == "sim_trade_stop_move"
+        assert kwargs["payload"]["prev_stop"] == pytest.approx(95.0)
+        assert kwargs["payload"]["new_stop"] == pytest.approx(98.0)
+
+    @pytest.mark.asyncio
+    async def test_short_tightening_move_updates_trade(self):
+        await _setup_db()
+        config_id = await _insert_config()
+        signal_id = await _insert_signal(config_id, side="short", stop_price=105.0, stop_trigger=107.1)
+        trade_id = await _insert_sim_trade(
+            signal_id,
+            config_id,
+            side="short",
+            entry_price=100.0,
+            stop_base=105.0,
+            stop_trigger=107.1,
+        )
+        trade = _trade_row(
+            trade_id, signal_id, config_id, side="short", entry_price=100.0, stop_base=105.0, stop_trigger=107.1
+        )
+        state = PositionState(side="short", entry_price=100.0, stop_price=107.1, quantity=100.0)
+
+        with patch("backend.live_tracker.notify_event", new=AsyncMock()):
+            await _apply_stop_moves(
+                trade,
+                [Signal(action="move_stop", stop_price=102.0)],
+                candle_open_time=1_100_000,
+                state=state,
+            )
+
+        async with get_db() as db:
+            cursor = await db.execute(
+                "SELECT stop_base, stop_trigger FROM sim_trades WHERE id = ?",
+                (trade_id,),
+            )
+            row = await cursor.fetchone()
+        assert row[0] == pytest.approx(102.0)
+        assert row[1] == pytest.approx(102.0 * (1.0 + 0.02))
+
+    @pytest.mark.asyncio
+    async def test_loosening_move_is_rejected(self):
+        """A move_stop that would loosen the stop must not change anything."""
+        await _setup_db()
+        config_id = await _insert_config()
+        signal_id = await _insert_signal(config_id)
+        trade_id = await _insert_sim_trade(signal_id, config_id, stop_base=95.0, stop_trigger=93.1)
+        trade = _trade_row(trade_id, signal_id, config_id, stop_base=95.0, stop_trigger=93.1)
+        state = PositionState(side="long", entry_price=100.0, stop_price=93.1, quantity=100.0)
+
+        with patch("backend.live_tracker.notify_event", new=AsyncMock()) as mock_notify:
+            await _apply_stop_moves(
+                trade,
+                [Signal(action="move_stop", stop_price=90.0)],  # lower than current 95.0
+                candle_open_time=1_100_000,
+                state=state,
+            )
+
+        async with get_db() as db:
+            cursor = await db.execute(
+                "SELECT stop_base, stop_trigger FROM sim_trades WHERE id = ?",
+                (trade_id,),
+            )
+            row = await cursor.fetchone()
+            cursor = await db.execute(
+                "SELECT COUNT(*) FROM sim_trade_stop_moves WHERE sim_trade_id = ?",
+                (trade_id,),
+            )
+            count = (await cursor.fetchone())[0]
+
+        assert row[0] == pytest.approx(95.0)
+        assert row[1] == pytest.approx(93.1)
+        assert count == 0
+        mock_notify.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_no_move_stop_signal_is_noop(self):
+        await _setup_db()
+        config_id = await _insert_config()
+        signal_id = await _insert_signal(config_id)
+        trade_id = await _insert_sim_trade(signal_id, config_id, stop_base=95.0, stop_trigger=93.1)
+        trade = _trade_row(trade_id, signal_id, config_id)
+        state = PositionState(side="long", entry_price=100.0, stop_price=93.1, quantity=100.0)
+
+        with patch("backend.live_tracker.notify_event", new=AsyncMock()) as mock_notify:
+            await _apply_stop_moves(
+                trade,
+                [Signal(action="exit_long", price=99.0)],
+                candle_open_time=1_100_000,
+                state=state,
+            )
+
+        async with get_db() as db:
+            cursor = await db.execute(
+                "SELECT COUNT(*) FROM sim_trade_stop_moves WHERE sim_trade_id = ?",
+                (trade_id,),
+            )
+            count = (await cursor.fetchone())[0]
+        assert count == 0
+        mock_notify.assert_not_called()

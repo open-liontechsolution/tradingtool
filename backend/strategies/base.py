@@ -30,9 +30,9 @@ class PositionState:
 
 @dataclass
 class Signal:
-    action: Literal["entry_long", "entry_short", "exit_long", "exit_short", "stop_long", "stop_short"]
+    action: Literal["entry_long", "entry_short", "exit_long", "exit_short", "stop_long", "stop_short", "move_stop"]
     price: float = 0.0  # suggested execution price (0 = use next open)
-    stop_price: float = 0.0
+    stop_price: float = 0.0  # for entry_*: initial stop; for move_stop: new raw stop level
 
 
 class Strategy(ABC):

@@ -409,6 +409,35 @@ async def get_sim_trade(
     return dict(zip(cols, row, strict=False))
 
 
+@router.get("/sim-trades/{trade_id}/stop-moves")
+async def list_sim_trade_stop_moves(
+    trade_id: int,
+    user: AuthUser = Depends(get_current_user),
+) -> dict:
+    """Return the trailing-stop movement history of a single SimTrade."""
+    async with get_db() as db:
+        cursor = await db.execute(
+            """SELECT st.id FROM sim_trades st
+               JOIN signal_configs sc ON st.config_id = sc.id
+               WHERE st.id = ? AND sc.user_id = ?""",
+            (trade_id, user.id),
+        )
+        if await cursor.fetchone() is None:
+            raise HTTPException(404, f"SimTrade {trade_id} not found")
+
+        cursor = await db.execute(
+            """SELECT id, sim_trade_id, prev_stop_base, new_stop_base,
+                      prev_stop_trigger, new_stop_trigger, candle_time, created_at
+               FROM sim_trade_stop_moves
+               WHERE sim_trade_id = ?
+               ORDER BY id ASC""",
+            (trade_id,),
+        )
+        rows = await cursor.fetchall()
+        cols = [d[0] for d in cursor.description]
+    return {"stop_moves": [dict(zip(cols, row, strict=False)) for row in rows]}
+
+
 @router.post("/sim-trades/{trade_id}/close")
 async def close_sim_trade(
     trade_id: int,
