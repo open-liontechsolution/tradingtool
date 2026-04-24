@@ -71,15 +71,19 @@ def _get_poll_interval(config: dict) -> int:
 async def _fill_pending_entries() -> None:
     """Fill entry_price for SimTrades in pending_entry state.
 
-    The entry price is the Open of the candle that started AFTER the signal.
-    Once that candle opens, we take the first available price as a proxy.
+    Honours ``modo_ejecucion`` from the strategy params:
+      * ``open_next`` (default): entry fills at the Open of the candle that
+        started AFTER the signal; ``entry_time = trigger_candle_time + step_ms``.
+      * ``close_current``: entry fills at the Close of the trigger candle
+        itself (already in DB when signal_engine created the sim_trade);
+        ``entry_time = trigger_candle_time``. Mirrors ``backtest_engine``.
     """
     async with get_db() as db:
         cursor = await db.execute(
             """SELECT st.id, st.symbol, st.interval, st.side, st.signal_id,
                       st.invested_amount, st.portfolio, st.leverage,
                       st.stop_base, st.stop_trigger, st.config_id,
-                      s.trigger_candle_time, sc.cost_bps, sc.strategy
+                      s.trigger_candle_time, sc.cost_bps, sc.strategy, sc.params
                FROM sim_trades st
                JOIN signals s ON st.signal_id = s.id
                JOIN signal_configs sc ON st.config_id = sc.id
@@ -101,6 +105,19 @@ async def _fill_pending_entries() -> None:
         trigger_time = trade["trigger_candle_time"]
         next_candle_open = trigger_time + step_ms
 
+        try:
+            params = json.loads(trade["params"]) if trade.get("params") else {}
+        except (TypeError, json.JSONDecodeError):
+            params = {}
+        execution_mode = params.get("modo_ejecucion", "open_next")
+        if execution_mode not in ("open_next", "close_current"):
+            logger.warning(
+                "SimTrade %d: unknown modo_ejecucion=%r, falling back to open_next",
+                trade["id"],
+                execution_mode,
+            )
+            execution_mode = "open_next"
+
         # Trigger async sync for the entry candle range if missing
         # (only the 2-candle window around the trigger; full history is handled by scanner)
         await ensure_candles(
@@ -110,29 +127,50 @@ async def _fill_pending_entries() -> None:
             next_candle_open + step_ms,
         )
 
-        # Check if next candle exists in DB (means it has opened and we have data)
-        async with get_db() as db:
-            cursor = await db.execute(
-                "SELECT open FROM klines WHERE symbol = ? AND interval = ? AND open_time = ?",
-                (trade["symbol"], interval, next_candle_open),
-            )
-            row = await cursor.fetchone()
-
         entry_price: float | None = None
-        if row is not None:
+        entry_time: int
+
+        if execution_mode == "close_current":
+            # Fill at trigger candle's close — always in DB because signal_engine
+            # read it to generate the signal.
+            async with get_db() as db:
+                cursor = await db.execute(
+                    "SELECT close FROM klines WHERE symbol = ? AND interval = ? AND open_time = ?",
+                    (trade["symbol"], interval, trigger_time),
+                )
+                row = await cursor.fetchone()
+            if row is None:
+                logger.warning(
+                    "SimTrade %d: trigger candle %d missing in klines for %s %s — retrying next cycle",
+                    trade["id"],
+                    trigger_time,
+                    trade["symbol"],
+                    interval,
+                )
+                continue
             entry_price = float(row[0])
+            entry_time = trigger_time
         else:
-            # If the next candle hasn't appeared in DB yet, check if we're past
-            # its open time — if so, use current ticker as proxy
-            if _now_ms() >= next_candle_open + 5000:  # 5s grace
+            # open_next: wait for the next candle to open and fill at its open.
+            async with get_db() as db:
+                cursor = await db.execute(
+                    "SELECT open FROM klines WHERE symbol = ? AND interval = ? AND open_time = ?",
+                    (trade["symbol"], interval, next_candle_open),
+                )
+                row = await cursor.fetchone()
+
+            if row is not None:
+                entry_price = float(row[0])
+            elif _now_ms() >= next_candle_open + 5000:  # 5s grace
                 try:
                     entry_price = await binance_client.get_ticker_price(trade["symbol"])
                 except Exception as exc:
                     logger.warning("Could not get ticker for pending entry fill: %s", exc)
                     continue
 
-        if entry_price is None:
-            continue  # not time yet
+            if entry_price is None:
+                continue  # not time yet
+            entry_time = next_candle_open
 
         invested = float(trade["invested_amount"])
         cost_bps = float(trade["cost_bps"])
@@ -147,7 +185,7 @@ async def _fill_pending_entries() -> None:
                    SET entry_price = ?, entry_time = ?, quantity = ?, fees = ?,
                        equity_peak = ?, status = 'open', updated_at = ?
                    WHERE id = ?""",
-                (entry_price, next_candle_open, quantity, fee, float(trade["portfolio"]), now, trade["id"]),
+                (entry_price, entry_time, quantity, fee, float(trade["portfolio"]), now, trade["id"]),
             )
             await db.execute(
                 "UPDATE signals SET status = 'active' WHERE id = ?",

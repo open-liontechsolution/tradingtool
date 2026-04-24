@@ -476,6 +476,204 @@ class TestEntryFill:
         assert trades[0]["status"] == "pending_entry"
         assert trades[0]["entry_price"] is None
 
+    @pytest.mark.asyncio
+    async def test_close_current_fills_at_trigger_candle_close(self):
+        """modo_ejecucion=close_current fills at the Close of the trigger candle itself."""
+        trigger_time = BASE_TIME
+        trigger_close = 123.5
+        next_open = 200.0  # much higher — asserts we did NOT use it
+
+        await _setup_db()
+        config = await _insert_config(
+            params=json.dumps(
+                {
+                    "N_entrada": 5,
+                    "M_salida": 3,
+                    "stop_pct": 0.02,
+                    "salida_por_ruptura": True,
+                    "modo_ejecucion": "close_current",
+                },
+                sort_keys=True,
+            )
+        )
+
+        now = _now_iso()
+        async with get_db() as db:
+            cursor = await db.execute(
+                """INSERT INTO signals
+                    (config_id, symbol, interval, strategy, side,
+                     trigger_candle_time, stop_price, stop_trigger_price,
+                     status, created_at)
+                   VALUES (?, 'BTCUSDT', '1h', 'breakout', 'long', ?, 96.04, 94.12, 'pending', ?)""",
+                (config["id"], trigger_time, now),
+            )
+            sig_id = cursor.lastrowid
+            await db.execute(
+                """INSERT INTO sim_trades
+                    (signal_id, config_id, symbol, interval, side,
+                     stop_base, stop_trigger, status, portfolio, invested_amount,
+                     leverage, fees, created_at, updated_at)
+                   VALUES (?, ?, 'BTCUSDT', '1h', 'long', 96.04, 94.12, 'pending_entry',
+                           10000.0, 10000.0, 1.0, 0.0, ?, ?)""",
+                (sig_id, config["id"], now, now),
+            )
+            await db.commit()
+
+        # Insert the trigger candle (with a distinct close) AND the next candle
+        # (with a wildly different open) — the fill must pick the trigger close.
+        await _insert_kline(
+            {
+                "open_time": trigger_time,
+                "open": 100.0,
+                "high": 130.0,
+                "low": 99.0,
+                "close": trigger_close,
+                "volume": 1000.0,
+            }
+        )
+        await _insert_kline(
+            {
+                "open_time": trigger_time + STEP_MS,
+                "open": next_open,
+                "high": 205.0,
+                "low": 199.0,
+                "close": 203.0,
+                "volume": 1000.0,
+            }
+        )
+
+        with patch("backend.live_tracker.ensure_candles", new=AsyncMock(return_value=True)):
+            await _fill_pending_entries()
+
+        trades = await _get_sim_trades(status="open")
+        assert len(trades) == 1
+        assert trades[0]["entry_price"] == pytest.approx(trigger_close)
+        assert trades[0]["entry_time"] == trigger_time  # NOT next_candle_open
+        assert trades[0]["quantity"] == pytest.approx(10000.0 / trigger_close)
+
+    @pytest.mark.asyncio
+    async def test_explicit_open_next_fills_at_next_candle_open(self):
+        """modo_ejecucion=open_next (explicit) keeps the historical fill-at-next-open behaviour."""
+        trigger_time = BASE_TIME
+        trigger_close = 123.5
+        next_open = 127.0
+
+        await _setup_db()
+        config = await _insert_config(
+            params=json.dumps(
+                {
+                    "N_entrada": 5,
+                    "M_salida": 3,
+                    "stop_pct": 0.02,
+                    "salida_por_ruptura": True,
+                    "modo_ejecucion": "open_next",
+                },
+                sort_keys=True,
+            )
+        )
+
+        now = _now_iso()
+        async with get_db() as db:
+            cursor = await db.execute(
+                """INSERT INTO signals
+                    (config_id, symbol, interval, strategy, side,
+                     trigger_candle_time, stop_price, stop_trigger_price,
+                     status, created_at)
+                   VALUES (?, 'BTCUSDT', '1h', 'breakout', 'long', ?, 96.04, 94.12, 'pending', ?)""",
+                (config["id"], trigger_time, now),
+            )
+            sig_id = cursor.lastrowid
+            await db.execute(
+                """INSERT INTO sim_trades
+                    (signal_id, config_id, symbol, interval, side,
+                     stop_base, stop_trigger, status, portfolio, invested_amount,
+                     leverage, fees, created_at, updated_at)
+                   VALUES (?, ?, 'BTCUSDT', '1h', 'long', 96.04, 94.12, 'pending_entry',
+                           10000.0, 10000.0, 1.0, 0.0, ?, ?)""",
+                (sig_id, config["id"], now, now),
+            )
+            await db.commit()
+
+        await _insert_kline(
+            {
+                "open_time": trigger_time,
+                "open": 100.0,
+                "high": 130.0,
+                "low": 99.0,
+                "close": trigger_close,
+                "volume": 1000.0,
+            }
+        )
+        await _insert_kline(
+            {
+                "open_time": trigger_time + STEP_MS,
+                "open": next_open,
+                "high": 130.0,
+                "low": 125.0,
+                "close": 128.0,
+                "volume": 1000.0,
+            }
+        )
+
+        with patch("backend.live_tracker.ensure_candles", new=AsyncMock(return_value=True)):
+            await _fill_pending_entries()
+
+        trades = await _get_sim_trades(status="open")
+        assert len(trades) == 1
+        assert trades[0]["entry_price"] == pytest.approx(next_open)
+        assert trades[0]["entry_time"] == trigger_time + STEP_MS
+
+    @pytest.mark.asyncio
+    async def test_missing_modo_ejecucion_defaults_to_open_next(self):
+        """Legacy configs without modo_ejecucion in params continue to fill at next open."""
+        trigger_time = BASE_TIME
+        next_open = 127.0
+
+        await _setup_db()
+        # Default _insert_config omits modo_ejecucion — mirrors old configs.
+        config = await _insert_config()
+
+        now = _now_iso()
+        async with get_db() as db:
+            cursor = await db.execute(
+                """INSERT INTO signals
+                    (config_id, symbol, interval, strategy, side,
+                     trigger_candle_time, stop_price, stop_trigger_price,
+                     status, created_at)
+                   VALUES (?, 'BTCUSDT', '1h', 'breakout', 'long', ?, 96.04, 94.12, 'pending', ?)""",
+                (config["id"], trigger_time, now),
+            )
+            sig_id = cursor.lastrowid
+            await db.execute(
+                """INSERT INTO sim_trades
+                    (signal_id, config_id, symbol, interval, side,
+                     stop_base, stop_trigger, status, portfolio, invested_amount,
+                     leverage, fees, created_at, updated_at)
+                   VALUES (?, ?, 'BTCUSDT', '1h', 'long', 96.04, 94.12, 'pending_entry',
+                           10000.0, 10000.0, 1.0, 0.0, ?, ?)""",
+                (sig_id, config["id"], now, now),
+            )
+            await db.commit()
+
+        await _insert_kline(
+            {
+                "open_time": trigger_time + STEP_MS,
+                "open": next_open,
+                "high": 130.0,
+                "low": 125.0,
+                "close": 128.0,
+                "volume": 1000.0,
+            }
+        )
+
+        with patch("backend.live_tracker.ensure_candles", new=AsyncMock(return_value=True)):
+            await _fill_pending_entries()
+
+        trades = await _get_sim_trades(status="open")
+        assert len(trades) == 1
+        assert trades[0]["entry_price"] == pytest.approx(next_open)
+        assert trades[0]["entry_time"] == trigger_time + STEP_MS
+
 
 # ---------------------------------------------------------------------------
 # Tests: candle-close exit (_check_candle_close_exits)
