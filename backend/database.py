@@ -286,7 +286,8 @@ async def init_db() -> None:
                 interval                TEXT    NOT NULL,
                 strategy                TEXT    NOT NULL,
                 params                  TEXT    NOT NULL DEFAULT '{}',
-                portfolio               REAL    NOT NULL DEFAULT 10000.0,
+                initial_portfolio       REAL    NOT NULL DEFAULT 10000.0,
+                current_portfolio       REAL    NOT NULL DEFAULT 10000.0,
                 invested_amount         REAL,
                 leverage                REAL,
                 cost_bps                REAL    NOT NULL DEFAULT 10.0,
@@ -450,6 +451,20 @@ async def init_db() -> None:
             "ON notification_log (event_type, reference_type, reference_id, channel)"
         )
         await db.commit()
+
+        # --- rename portfolio → initial_portfolio + add current_portfolio (#48) ---
+        cursor = await db.execute("PRAGMA table_info(signal_configs)")
+        sc_cols = {row[1] for row in await cursor.fetchall()}
+        if "portfolio" in sc_cols and "initial_portfolio" not in sc_cols:
+            await db.execute("ALTER TABLE signal_configs RENAME COLUMN portfolio TO initial_portfolio")
+            await db.commit()
+            sc_cols = (sc_cols - {"portfolio"}) | {"initial_portfolio"}
+        if "current_portfolio" not in sc_cols:
+            # Add as nullable then backfill, since SQLite needs a non-default-NULL
+            # column to be added with a constant default.
+            await db.execute("ALTER TABLE signal_configs ADD COLUMN current_portfolio REAL")
+            await db.execute("UPDATE signal_configs SET current_portfolio = initial_portfolio")
+            await db.commit()
 
         # --- drop legacy stop_cross_pct / stop_trigger columns (issue #49) ---
         # Live now closes stops at stop_base; the trigger buffer is gone.

@@ -79,15 +79,17 @@ async def _insert_config(
         cursor = await db.execute(
             """INSERT INTO signal_configs
                 (symbol, interval, strategy, params,
-                 portfolio, invested_amount, leverage, cost_bps,
+                 initial_portfolio, current_portfolio,
+                 invested_amount, leverage, cost_bps,
                  polling_interval_s, active, last_processed_candle,
                  created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)""",
             (
                 symbol,
                 interval,
                 strategy,
                 params_json,
+                portfolio,
                 portfolio,
                 None,
                 leverage,
@@ -241,11 +243,12 @@ class TestPortfolioModes:
             cursor = await db.execute(
                 """INSERT INTO signal_configs
                     (symbol, interval, strategy, params,
-                     portfolio, invested_amount, leverage, cost_bps,
+                     initial_portfolio, current_portfolio,
+                     invested_amount, leverage, cost_bps,
                      polling_interval_s, active, last_processed_candle,
                      created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)""",
-                ("ETHUSDT", "1d", "breakout", params_json, 10000.0, 5000.0, None, 10.0, None, 1, now, now),
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)""",
+                ("ETHUSDT", "1d", "breakout", params_json, 10000.0, 10000.0, 5000.0, None, 10.0, None, 1, now, now),
             )
             await db.commit()
             config_id = cursor.lastrowid

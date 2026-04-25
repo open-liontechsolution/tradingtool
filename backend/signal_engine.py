@@ -97,8 +97,10 @@ async def _create_signal_and_sim_trade(
     """Create a signal + sim_trade pair. Returns signal_id or None if dedup."""
     now = _now_iso()
 
-    # Resolve portfolio/invested/leverage
-    portfolio = float(config["portfolio"])
+    # Resolve sizing against the config's *current* portfolio (compounding).
+    # ``sim_trades.portfolio`` is the snapshot at entry; ``current_portfolio``
+    # on the config evolves as each closed trade applies its PnL.
+    portfolio = float(config["current_portfolio"])
     invested_amount = config["invested_amount"]
     leverage = config["leverage"]
     if invested_amount is not None:

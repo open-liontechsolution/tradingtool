@@ -45,7 +45,8 @@ async def _insert_config(**overrides) -> int:
         "interval": "1h",
         "strategy": "breakout",
         "params": json.dumps({"N_entrada": 5, "M_salida": 3, "stop_pct": 0.02}, sort_keys=True),
-        "portfolio": 10000.0,
+        "initial_portfolio": 10000.0,
+        "current_portfolio": 10000.0,
         "invested_amount": None,
         "leverage": 1.0,
         "cost_bps": 10.0,
@@ -54,21 +55,28 @@ async def _insert_config(**overrides) -> int:
         "last_processed_candle": 0,
     }
     defaults.update(overrides)
+    # Tolerate legacy callers passing portfolio=… (set both columns).
+    if "portfolio" in defaults:
+        defaults["initial_portfolio"] = defaults["portfolio"]
+        defaults["current_portfolio"] = defaults["portfolio"]
+        defaults.pop("portfolio")
     now = _now_iso()
     async with get_db() as db:
         cursor = await db.execute(
             """INSERT INTO signal_configs
                 (symbol, interval, strategy, params,
-                 portfolio, invested_amount, leverage, cost_bps,
+                 initial_portfolio, current_portfolio,
+                 invested_amount, leverage, cost_bps,
                  polling_interval_s, active, last_processed_candle,
                  created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 defaults["symbol"],
                 defaults["interval"],
                 defaults["strategy"],
                 defaults["params"],
-                defaults["portfolio"],
+                defaults["initial_portfolio"],
+                defaults["current_portfolio"],
                 defaults["invested_amount"],
                 defaults["leverage"],
                 defaults["cost_bps"],
@@ -629,3 +637,143 @@ class TestApplyStopMoves:
             count = (await cursor.fetchone())[0]
         assert count == 0
         mock_notify.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Tests: Dynamic equity (#48) — current_portfolio updates on close
+# ---------------------------------------------------------------------------
+
+
+async def _read_current_portfolio(config_id: int) -> float:
+    async with get_db() as db:
+        cursor = await db.execute(
+            "SELECT current_portfolio FROM signal_configs WHERE id = ?",
+            (config_id,),
+        )
+        row = await cursor.fetchone()
+    assert row is not None, f"config {config_id} not found"
+    return float(row[0])
+
+
+class TestDynamicEquity:
+    @pytest.mark.asyncio
+    async def test_negative_pnl_decreases_current_portfolio(self):
+        """A losing trade closing on intrabar stop subtracts net_pnl from current_portfolio."""
+        await _setup_db()
+        config_id = await _insert_config(cost_bps=0.0)  # no fees → assertions exact
+        before = await _read_current_portfolio(config_id)
+
+        signal_id = await _insert_signal(config_id, stop_price=95.0)
+        await _insert_sim_trade(
+            signal_id,
+            config_id,
+            status="open",
+            side="long",
+            entry_price=100.0,
+            stop_base=95.0,
+            quantity=100.0,
+            fees=0.0,
+        )
+
+        with patch("backend.live_tracker.binance_client") as mock_client:
+            mock_client.get_ticker_price = AsyncMock(return_value=90.0)  # gap below stop
+            mock_client.rate_limit = MagicMock()
+            mock_client.rate_limit.used_weight = 10
+            mock_client.rate_limit.weight_limit = 1200
+            await _check_intrabar_stops()
+
+        after = await _read_current_portfolio(config_id)
+        # exec_price = 90 (gap), gross_pnl = 100 * (90-100) = -1000, no fees
+        assert after == pytest.approx(before - 1000.0, abs=0.01)
+
+    @pytest.mark.asyncio
+    async def test_positive_pnl_increases_current_portfolio(self):
+        """A winning short trade (price drops) increases current_portfolio when stopped early."""
+        # Synthesize a winning close: short at 100, manual close hits not available here,
+        # so we use a short whose stop is far above and force a positive scenario by
+        # closing via a stop at favourable price (would only happen with a tightened stop).
+        # Easier: simulate by inserting a sim_trade then directly applying _apply_pnl.
+        from backend.live_tracker import _apply_pnl_to_equity
+
+        await _setup_db()
+        config_id = await _insert_config(cost_bps=0.0)
+        before = await _read_current_portfolio(config_id)
+
+        async with get_db() as db:
+            await _apply_pnl_to_equity(db, config_id, +250.0, _now_iso())
+            await db.commit()
+
+        after = await _read_current_portfolio(config_id)
+        assert after == pytest.approx(before + 250.0, abs=0.01)
+
+    @pytest.mark.asyncio
+    async def test_next_trade_sizes_against_updated_current_portfolio(self):
+        """After a closed trade updates current_portfolio, the next sim_trade
+        opens with the new sizing (compounding)."""
+        from backend.signal_engine import _create_signal_and_sim_trade
+
+        await _setup_db()
+        config_id = await _insert_config(cost_bps=0.0, leverage=1.0)
+
+        # Pretend a previous winning trade closed: bump current_portfolio by +500.
+        from backend.live_tracker import _apply_pnl_to_equity
+
+        async with get_db() as db:
+            await _apply_pnl_to_equity(db, config_id, +500.0, _now_iso())
+            await db.commit()
+
+        # Read the updated config (signal_engine uses the dict's snapshot).
+        async with get_db() as db:
+            cursor = await db.execute("SELECT * FROM signal_configs WHERE id = ?", (config_id,))
+            row = await cursor.fetchone()
+            cols = [d[0] for d in cursor.description]
+        config = dict(zip(cols, row, strict=False))
+
+        sid = await _create_signal_and_sim_trade(
+            config=config,
+            side="long",
+            trigger_candle_time=2_000_000,
+            stop_price=95.0,
+        )
+
+        async with get_db() as db:
+            cursor = await db.execute(
+                "SELECT portfolio, invested_amount FROM sim_trades WHERE signal_id = ?",
+                (sid,),
+            )
+            row = await cursor.fetchone()
+        # New trade dimensions against current_portfolio = 10000 + 500 = 10500
+        assert row[0] == pytest.approx(10500.0, abs=0.01)
+        assert row[1] == pytest.approx(10500.0, abs=0.01)  # leverage=1.0
+
+    @pytest.mark.asyncio
+    async def test_initial_portfolio_edit_does_not_affect_current(self):
+        """Editing initial_portfolio (e.g. via PATCH) leaves current_portfolio untouched."""
+        await _setup_db()
+        config_id = await _insert_config()
+
+        # Tweak current_portfolio to be different from initial.
+        from backend.live_tracker import _apply_pnl_to_equity
+
+        async with get_db() as db:
+            await _apply_pnl_to_equity(db, config_id, -300.0, _now_iso())
+            await db.commit()
+        current_before = await _read_current_portfolio(config_id)
+
+        # Now edit initial_portfolio (mimic PATCH).
+        async with get_db() as db:
+            await db.execute(
+                "UPDATE signal_configs SET initial_portfolio = ? WHERE id = ?",
+                (15000.0, config_id),
+            )
+            await db.commit()
+
+        # current_portfolio is unchanged.
+        async with get_db() as db:
+            cursor = await db.execute(
+                "SELECT initial_portfolio, current_portfolio FROM signal_configs WHERE id = ?",
+                (config_id,),
+            )
+            row = await cursor.fetchone()
+        assert row[0] == pytest.approx(15000.0)
+        assert row[1] == pytest.approx(current_before)

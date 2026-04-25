@@ -73,7 +73,8 @@ async def _insert_config(**overrides) -> dict:
             {"N_entrada": 5, "M_salida": 3, "stop_pct": 0.02, "salida_por_ruptura": True},
             sort_keys=True,
         ),
-        "portfolio": 10000.0,
+        "initial_portfolio": 10000.0,
+        "current_portfolio": 10000.0,
         "invested_amount": None,
         "leverage": 1.0,
         "cost_bps": 0.0,  # no fees simplifies PnL assertions
@@ -82,23 +83,29 @@ async def _insert_config(**overrides) -> dict:
         "last_processed_candle": 0,
     }
     defaults.update(overrides)
-    # Tolerate legacy callers that still pass stop_cross_pct=...
+    # Tolerate legacy callers that still pass stop_cross_pct=... or portfolio=...
     defaults.pop("stop_cross_pct", None)
+    if "portfolio" in defaults:
+        defaults["initial_portfolio"] = defaults["portfolio"]
+        defaults["current_portfolio"] = defaults["portfolio"]
+        defaults.pop("portfolio")
     now = _now_iso()
     async with get_db() as db:
         cursor = await db.execute(
             """INSERT INTO signal_configs
                 (symbol, interval, strategy, params,
-                 portfolio, invested_amount, leverage, cost_bps,
+                 initial_portfolio, current_portfolio,
+                 invested_amount, leverage, cost_bps,
                  polling_interval_s, active, last_processed_candle,
                  created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 defaults["symbol"],
                 defaults["interval"],
                 defaults["strategy"],
                 defaults["params"],
-                defaults["portfolio"],
+                defaults["initial_portfolio"],
+                defaults["current_portfolio"],
                 defaults["invested_amount"],
                 defaults["leverage"],
                 defaults["cost_bps"],

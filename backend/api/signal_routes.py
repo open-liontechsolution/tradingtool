@@ -29,7 +29,7 @@ class SignalConfigCreate(BaseModel):
     interval: str
     strategy: str
     params: dict = {}
-    portfolio: float = 10_000.0
+    initial_portfolio: float = 10_000.0
     invested_amount: float | None = None
     leverage: float | None = None
     cost_bps: float = 10.0
@@ -39,7 +39,7 @@ class SignalConfigCreate(BaseModel):
 
 class SignalConfigPatch(BaseModel):
     active: bool | None = None
-    portfolio: float | None = None
+    initial_portfolio: float | None = None
     invested_amount: float | None = None
     leverage: float | None = None
     cost_bps: float | None = None
@@ -98,17 +98,19 @@ async def create_signal_config(
             cursor = await db.execute(
                 """INSERT INTO signal_configs
                     (user_id, symbol, interval, strategy, params,
-                     portfolio, invested_amount, leverage, cost_bps,
+                     initial_portfolio, current_portfolio,
+                     invested_amount, leverage, cost_bps,
                      polling_interval_s, active, telegram_enabled, last_processed_candle,
                      created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0, ?, ?)""",
                 (
                     user.id,
                     req.symbol.upper(),
                     req.interval,
                     req.strategy,
                     params_json,
-                    req.portfolio,
+                    req.initial_portfolio,
+                    req.initial_portfolio,
                     req.invested_amount,
                     req.leverage,
                     req.cost_bps,
@@ -169,9 +171,11 @@ async def patch_signal_config(
     if req.active is not None:
         fields.append("active = ?")
         values.append(1 if req.active else 0)
-    if req.portfolio is not None:
-        fields.append("portfolio = ?")
-        values.append(req.portfolio)
+    if req.initial_portfolio is not None:
+        # Editing initial_portfolio is a "starting capital" relabel — never
+        # touches current_portfolio (which evolves with closed PnL).
+        fields.append("initial_portfolio = ?")
+        values.append(req.initial_portfolio)
     if req.invested_amount is not None:
         fields.append("invested_amount = ?")
         values.append(req.invested_amount)
@@ -493,6 +497,11 @@ async def close_sim_trade(
         await db.execute(
             "UPDATE signals SET status = 'closed' WHERE id = ?",
             (trade["signal_id"],),
+        )
+        # Apply PnL to the config's current_portfolio (#48). Mirror live_tracker.
+        await db.execute(
+            "UPDATE signal_configs SET current_portfolio = current_portfolio + ?, updated_at = ? WHERE id = ?",
+            (net_pnl, now, trade["config_id"]),
         )
         await db.commit()
 
