@@ -53,10 +53,11 @@ async def _insert_config(user_id: int, *, telegram_enabled: bool = False) -> int
     async with get_db() as db:
         cursor = await db.execute(
             """INSERT INTO signal_configs
-                (user_id, symbol, interval, strategy, params, portfolio,
+                (user_id, symbol, interval, strategy, params,
+                 initial_portfolio, current_portfolio,
                  invested_amount, leverage, cost_bps, polling_interval_s,
                  active, telegram_enabled, last_processed_candle, created_at, updated_at)
-               VALUES (?, 'BTCUSDT', '1h', 'breakout', '{}', 10000,
+               VALUES (?, 'BTCUSDT', '1h', 'breakout', '{}', 10000, 10000,
                        NULL, 1.0, 10.0, NULL,
                        1, ?, 0, ?, ?)""",
             (user_id, 1 if telegram_enabled else 0, now, now),

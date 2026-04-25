@@ -51,6 +51,20 @@ def _current_candle_open(interval: str) -> int:
     return (now_ms // step_ms) * step_ms
 
 
+async def _apply_pnl_to_equity(db, config_id: int, net_pnl: float, now: str) -> None:
+    """Add ``net_pnl`` to ``signal_configs.current_portfolio`` for ``config_id``.
+
+    Caller is expected to be inside an open ``async with get_db() as db`` block
+    so this runs in the same transaction as the sim_trade close. The update is
+    bare arithmetic — clamping to non-negative and ``blown`` state are deferred
+    to #50.
+    """
+    await db.execute(
+        "UPDATE signal_configs SET current_portfolio = current_portfolio + ?, updated_at = ? WHERE id = ?",
+        (net_pnl, now, config_id),
+    )
+
+
 def _get_poll_interval(config: dict) -> int:
     """Determine polling interval for a config, with rate-limit backoff."""
     override = config.get("polling_interval_s")
@@ -307,6 +321,7 @@ async def _check_intrabar_stops() -> None:
                 "UPDATE signals SET status = 'closed' WHERE id = ?",
                 (trade["signal_id"],),
             )
+            await _apply_pnl_to_equity(db, trade["config_id"], net_pnl, now)
             await db.commit()
 
         logger.info(
@@ -570,6 +585,7 @@ async def _check_candle_close_exits(interval: str | None = None) -> None:
                             "UPDATE signals SET status = 'closed' WHERE id = ?",
                             (trade["signal_id"],),
                         )
+                        await _apply_pnl_to_equity(db, trade["config_id"], net_pnl, now)
                         await db.commit()
 
                     duration = max(
@@ -647,6 +663,7 @@ async def _check_candle_close_exits(interval: str | None = None) -> None:
                             "UPDATE signals SET status = 'closed' WHERE id = ?",
                             (trade["signal_id"],),
                         )
+                        await _apply_pnl_to_equity(db, trade["config_id"], net_pnl, now)
                         await db.commit()
 
                     await notify_event(

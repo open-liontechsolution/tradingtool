@@ -122,15 +122,17 @@ async def _insert_config(
         cursor = await db.execute(
             """INSERT INTO signal_configs
                 (symbol, interval, strategy, params,
-                 portfolio, invested_amount, leverage, cost_bps,
+                 initial_portfolio, current_portfolio,
+                 invested_amount, leverage, cost_bps,
                  polling_interval_s, active, last_processed_candle,
                  created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, NULL, 1.0, ?, NULL, 1, 0, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, NULL, 1.0, ?, NULL, 1, 0, ?, ?)""",
             (
                 symbol,
                 interval,
                 strategy,
                 json.dumps(params, sort_keys=True),
+                portfolio,
                 portfolio,
                 cost_bps,
                 now,
