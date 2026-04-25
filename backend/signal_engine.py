@@ -62,6 +62,23 @@ async def _has_active_trade(config_id: int) -> bool:
         return await cursor.fetchone() is not None
 
 
+async def _has_trade_closed_on_candle(config_id: int, candle_open_time: int) -> bool:
+    """Return True if this config closed a sim_trade exactly on this candle.
+
+    Mirrors backtest's per-candle order: when an exit fires, the engine does NOT
+    process entry signals on the same candle (``exit_executed`` short-circuits
+    the entry block in ``backtest_engine.run_backtest``). Without this guard,
+    live opens a fresh position on the same candle that just exited, producing
+    one extra trade per same-candle exit/entry pair vs. backtest.
+    """
+    async with get_db() as db:
+        cursor = await db.execute(
+            "SELECT 1 FROM sim_trades WHERE config_id = ? AND status = 'closed' AND exit_time = ?",
+            (config_id, candle_open_time),
+        )
+        return await cursor.fetchone() is not None
+
+
 async def _update_last_processed(config_id: int, candle_time: int) -> None:
     async with get_db() as db:
         await db.execute(
@@ -179,6 +196,16 @@ async def scan_config(config: dict) -> None:
     if await _has_active_trade(config["id"]):
         logger.debug(
             "Config %d already has an active trade, skipping entry scan for candle %d",
+            config["id"],
+            last_closed,
+        )
+        await _update_last_processed(config["id"], last_closed)
+        return
+
+    # Skip entry signal if a trade just closed on the same candle (mirror backtest).
+    if await _has_trade_closed_on_candle(config["id"], last_closed):
+        logger.debug(
+            "Config %d had a trade close on candle %d, skipping entry scan",
             config["id"],
             last_closed,
         )
