@@ -158,10 +158,19 @@ Frontend-only (placed in `frontend/.env.development.local`, only needed to overr
 
 Replays a fixed klines fixture through both the backtest engine and the live engine (`signal_engine.scan_config` + `live_tracker._fill_pending_entries` + `_check_candle_close_exits`) and asserts trade-log equivalence — same entries, same exits, same exit reasons, same prices.
 
-- Fixtures live in `tests/fixtures/parity/<slot>.json.gz`. Slot A is BTCUSDT 4h 2023-2024 (~4380 candles, ~140 KiB gzipped). Regenerate with `python -m tests.fixtures.parity._seed_slot_a`.
-- The harness drives the live engine candle-by-candle with a mocked clock (`_now_ms`) and skips intrabar polling — the candle-close path mirrors backtest's gap handling exactly, so structural parity holds without it. Intrabar parity is deferred to Phase 5 (after #49 unifies the stop trigger).
-- Comparison is structural: `entry_time, exit_time, side, entry_price, exit_price, normalized exit_reason`. Exit reasons are normalized via `_normalize_exit_reason` (`stop_long`/`stop_intrabar`/`stop_candle` → `"stop"`, etc.). PnL/quantity comparison is parameterized by sizing and waits for #48 (dynamic equity).
-- **Adding a new slot**: drop a `<name>.json.gz` payload (same shape: `{symbol, interval, start_ms, end_ms, step_ms, candles: [...]}`) into `tests/fixtures/parity/`, then add a `_load_slot("<name>")`-driven test method that calls `assert_trade_logs_equal(bt_log, live_log)`. Use `modo_ejecucion=close_current` for clean parity (open_next has a separate exit-fill asymmetry pending review).
+- **Marker `slow`**: parity tests run under `@pytest.mark.slow` and are excluded from the default `pytest -q` (configured in `pyproject.toml`). Run them with `pytest -m slow tests/integration/test_parity.py`. CI has a dedicated non-blocking `test-parity` job.
+- **Slot fixtures** live in `tests/fixtures/parity/<slot>.json.gz`:
+  - **slot_a** — BTCUSDT 4h, 2023-2024 (~4400 candles, ~140 KiB gzipped). Base slot.
+  - **slot_b** — BTCUSDT 1h, 2024 Q1 (~2200 candles, ~70 KiB). High-density, exercises trailing `move_stop`.
+  - **slot_c** — ETHUSDT 4h, full 2022 (~2200 candles, ~67 KiB). Bear-market regime.
+  - Regenerate any slot with `python -m tests.fixtures.parity._seed_slot_<x>` (or all the dependencies you need; the helper module `_seeder.py` does the actual download).
+- **Test matrix**: `tests/integration/test_parity.py::test_parity_slot_strategy` is parametrised over `slot_name × strategy_name`. Strategies covered: `breakout`, `breakout_trailing`, `support_resistance`, `support_resistance_trailing` (×3 slots = 12 cases). All run with `modo_ejecucion=close_current` (the only mode with full engine parity post-#49 — `open_next` has a residual exit-fill gap that is its own follow-up).
+- **What's compared**: structural fields per trade — `entry_time`, `exit_time`, `side`, `entry_price`, `exit_price`, normalized `exit_reason` (`stop_long`/`stop_intrabar`/`stop_candle` → `"stop"`, etc.). PnL/quantity numeric parity holds for `cost_bps=0` configs because backtest's compounding equity matches live's `current_portfolio` evolution (#48). Helper: `assert_trade_logs_equal(bt_log, live_log)`.
+- **What's NOT compared yet** (deferred to dedicated follow-ups, not blockers for #51):
+  - **Intrabar polling**: harness drives candle-close logic only. Intrabar exits at `stop_base` (#49) but the harness doesn't inject worst-case ticker prices per candle.
+  - **Leverage liquidation parity (Block 4)**: live now models `liquidation_price` (#50) but backtest only tracks bankruptcy (`equity ≤ 0`). Slot D (SOLUSDT 15m with `leverage > 1`) is deferred until backtest also computes a per-trade `liquidation_price`.
+  - **`open_next` mode**: backtest exits at the *current* candle's open while live exits at close — same trade list, different exit prices. Out of scope for the harness as configured.
+- **Adding a new slot**: write a wrapper in `tests/fixtures/parity/_seed_slot_<x>.py` that calls `seed_slot(...)` from `_seeder.py`, run it once, commit the resulting `.json.gz`, and add the slot name to `_SLOTS` in `test_parity.py`.
 
 ## Deployment
 
