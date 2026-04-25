@@ -26,6 +26,11 @@ class PositionState:
     entry_time: int = 0  # open_time of entry candle
     stop_price: float = 0.0
     quantity: float = 0.0
+    # Set by ``backtest_engine`` at entry fill when leverage > 1; mirrors the
+    # ``sim_trades.liquidation_price`` column used by live. None means "no
+    # liquidation risk modelled" (unleveraged) and the engine skips the
+    # liquidation check.
+    liquidation_price: float | None = None
 
 
 @dataclass

@@ -116,6 +116,8 @@ async def _insert_config(
     params: dict,
     portfolio: float,
     cost_bps: float,
+    leverage: float = 1.0,
+    maintenance_margin_pct: float = 0.005,
 ) -> dict:
     now = _now_iso()
     async with get_db() as db:
@@ -123,10 +125,10 @@ async def _insert_config(
             """INSERT INTO signal_configs
                 (symbol, interval, strategy, params,
                  initial_portfolio, current_portfolio,
-                 invested_amount, leverage, cost_bps,
+                 invested_amount, leverage, cost_bps, maintenance_margin_pct,
                  polling_interval_s, active, last_processed_candle,
                  created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, NULL, 1.0, ?, NULL, 1, 0, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL, 1, 0, ?, ?)""",
             (
                 symbol,
                 interval,
@@ -134,7 +136,9 @@ async def _insert_config(
                 json.dumps(params, sort_keys=True),
                 portfolio,
                 portfolio,
+                leverage,
                 cost_bps,
+                maintenance_margin_pct,
                 now,
                 now,
             ),
@@ -176,6 +180,7 @@ def _normalize_exit_reason(raw: str) -> str:
         "exit_long": "exit",
         "exit_short": "exit",
         "exit_signal": "exit",
+        "liquidated": "liquidated",
         "manual": "manual",
         "config_deleted": "config_deleted",
     }
@@ -341,11 +346,18 @@ _STRATEGY_PARAMS = {
 }
 
 
-_SLOTS = ["slot_a", "slot_b", "slot_c"]
+_SLOTS = ["slot_a", "slot_b", "slot_c", "slot_d"]
 _STRATEGIES = list(_STRATEGY_PARAMS.keys())
 
 
-async def _run_parity_case(slot_name: str, strategy_name: str) -> None:
+async def _run_parity_case(
+    slot_name: str,
+    strategy_name: str,
+    *,
+    leverage: float = 1.0,
+    maintenance_margin_pct: float = 0.005,
+    expect_liquidation: bool = False,
+) -> None:
     slot = _load_slot(slot_name)
     symbol = slot["symbol"]
     interval = slot["interval"]
@@ -355,6 +367,12 @@ async def _run_parity_case(slot_name: str, strategy_name: str) -> None:
     await _bulk_insert_klines(symbol, interval, candles)
 
     strategy_params = dict(_STRATEGY_PARAMS[strategy_name])
+    if leverage > 1.0:
+        # backtest_engine reads leverage + maintenance_margin_pct from params;
+        # live reads them from signal_configs columns. Mirror both so the two
+        # engines share the same config.
+        strategy_params["leverage"] = leverage
+        strategy_params["maintenance_margin_pct"] = maintenance_margin_pct
     portfolio = 10_000.0
     cost_bps = 0.0
 
@@ -365,6 +383,8 @@ async def _run_parity_case(slot_name: str, strategy_name: str) -> None:
         params=strategy_params,
         portfolio=portfolio,
         cost_bps=cost_bps,
+        leverage=leverage,
+        maintenance_margin_pct=maintenance_margin_pct,
     )
 
     start_ms = int(candles[0]["open_time"])
@@ -379,7 +399,8 @@ async def _run_parity_case(slot_name: str, strategy_name: str) -> None:
         initial_capital=portfolio,
     )
     assert bt_result.error is None, f"backtest error: {bt_result.error}"
-    assert not bt_result.liquidated, f"backtest liquidated unexpectedly on {slot_name}/{strategy_name}"
+    if not expect_liquidation:
+        assert not bt_result.liquidated, f"backtest liquidated unexpectedly on {slot_name}/{strategy_name}"
 
     live_log = await _run_live_replay(config, candles, interval, warmup=0)
 
@@ -391,8 +412,34 @@ async def _run_parity_case(slot_name: str, strategy_name: str) -> None:
 @pytest.mark.parametrize("slot_name", _SLOTS)
 @pytest.mark.parametrize("strategy_name", _STRATEGIES)
 async def test_parity_slot_strategy(slot_name: str, strategy_name: str) -> None:
-    """Replays slot × strategy through both engines and asserts trade-log parity."""
+    """Replays slot × strategy through both engines and asserts trade-log parity (unleveraged)."""
     fixture_path = FIXTURE_DIR / f"{slot_name}.json.gz"
     if not fixture_path.exists():
         pytest.skip(f"fixture {fixture_path.name} not present — regenerate with the matching seeder script")
     await _run_parity_case(slot_name, strategy_name)
+
+
+@pytest.mark.slow
+@pytest.mark.asyncio
+@pytest.mark.parametrize("strategy_name", _STRATEGIES)
+async def test_parity_leveraged_slot_d(strategy_name: str) -> None:
+    """Slot D × strategy × leverage=10 — exercises the liquidation parity (#58 Gap 1).
+
+    SOLUSDT 15m 2024 Q2 has wide intrabar swings; with leverage=10 most strats
+    eventually trip a per-trade liquidation. Both engines are expected to:
+
+    1. Produce the same trade list up to and including the first liquidated
+       trade (exit_reason='liquidated', exit_price=liquidation_price).
+    2. Stop opening new trades from that point onward (live: status='blown';
+       backtest: local ``blown`` flag).
+    """
+    fixture_path = FIXTURE_DIR / "slot_d.json.gz"
+    if not fixture_path.exists():
+        pytest.skip("slot_d.json.gz not present — run python -m tests.fixtures.parity._seed_slot_d")
+    await _run_parity_case(
+        "slot_d",
+        strategy_name,
+        leverage=10.0,
+        maintenance_margin_pct=0.005,
+        expect_liquidation=True,
+    )

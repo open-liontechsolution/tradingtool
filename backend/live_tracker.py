@@ -51,10 +51,13 @@ def _current_candle_open(interval: str) -> int:
     return (now_ms // step_ms) * step_ms
 
 
-def _compute_liquidation_price(
+def compute_liquidation_price(
     *, side: str, entry_price: float, leverage: float, maintenance_margin_pct: float
 ) -> float | None:
     """Approximate isolated-margin liquidation price.
+
+    Public API — also used by ``backend.backtest_engine`` so the two engines
+    apply the same formula.
 
     Formula (isolated margin, single position):
       long:  liq = entry × (1 − 1/leverage + mm)
@@ -75,6 +78,11 @@ def _compute_liquidation_price(
     if side == "short":
         return entry_price * (1.0 + factor)
     return None
+
+
+# Internal alias kept for backward-compat with existing tests/callers that
+# import the underscored name. New callers should use the public name.
+_compute_liquidation_price = compute_liquidation_price
 
 
 async def _apply_pnl_to_equity(db, config_id: int, net_pnl: float, now: str) -> None:
@@ -265,7 +273,7 @@ async def _fill_pending_entries() -> None:
         quantity = invested / entry_price
         leverage = float(trade.get("leverage") or 1.0)
         mm_pct = float(trade.get("maintenance_margin_pct") or 0.005)
-        liquidation_price = _compute_liquidation_price(
+        liquidation_price = compute_liquidation_price(
             side=trade["side"],
             entry_price=entry_price,
             leverage=leverage,
@@ -587,7 +595,7 @@ async def _check_candle_close_exits(interval: str | None = None) -> None:
     When ``interval`` is provided, only trades on that timeframe are evaluated.
     """
     base_query = """SELECT st.id, st.symbol, st.interval, st.side, st.entry_price,
-                      st.entry_time, st.stop_base,
+                      st.entry_time, st.stop_base, st.liquidation_price,
                       st.quantity, st.portfolio, st.invested_amount, st.fees,
                       st.config_id, st.signal_id,
                       sc.params, sc.strategy, sc.cost_bps
@@ -669,6 +677,81 @@ async def _check_candle_close_exits(interval: str | None = None) -> None:
                 stop_price=float(trade["stop_base"]),
                 quantity=float(trade["quantity"]),
             )
+
+            # Candle-close liquidation check (#58 Gap 1). Mirrors backtest:
+            # if the candle's low/high crossed liquidation_price, the trade
+            # closes at liq_price with exit_reason='liquidated' BEFORE the
+            # strategy's stop logic gets a chance. Acts as a backstop in case
+            # the intrabar ticker poll missed the cross (rate limit, network
+            # blip).
+            liq = trade.get("liquidation_price")
+            if liq is not None:
+                liq = float(liq)
+                low_p = float(candle["low"])
+                high_p = float(candle["high"])
+                liq_triggered = (trade["side"] == "long" and low_p <= liq) or (
+                    trade["side"] == "short" and high_p >= liq
+                )
+                if liq_triggered:
+                    exec_price = liq
+                    entry_price = float(trade["entry_price"])
+                    quantity = float(trade["quantity"])
+                    cost_factor = float(trade["cost_bps"]) / 10_000.0
+                    gross_pnl = (
+                        quantity * (exec_price - entry_price)
+                        if trade["side"] == "long"
+                        else quantity * (entry_price - exec_price)
+                    )
+                    exit_fee = abs(quantity * exec_price) * cost_factor
+                    net_pnl = gross_pnl - exit_fee
+                    total_fees = float(trade["fees"]) + exit_fee
+                    portfolio = float(trade["portfolio"])
+                    pnl_pct = net_pnl / portfolio if portfolio > 0 else 0.0
+
+                    async with get_db() as db:
+                        await db.execute(
+                            """UPDATE sim_trades
+                               SET exit_price = ?, exit_time = ?,
+                                   exit_reason = 'liquidated',
+                                   status = 'closed', pnl = ?, pnl_pct = ?,
+                                   fees = ?, updated_at = ?
+                               WHERE id = ?""",
+                            (exec_price, int(candle["open_time"]), net_pnl, pnl_pct, total_fees, now, trade["id"]),
+                        )
+                        await db.execute(
+                            "UPDATE signals SET status = 'closed' WHERE id = ?",
+                            (trade["signal_id"],),
+                        )
+                        await _apply_pnl_to_equity(db, trade["config_id"], net_pnl, now)
+                        await db.commit()
+
+                    await _maybe_mark_blown(trade["config_id"], now)
+
+                    await notify_event(
+                        event_type="liquidated",
+                        config_id=trade["config_id"],
+                        reference_type="sim_trade",
+                        reference_id=trade["id"],
+                        payload={
+                            "symbol": trade["symbol"],
+                            "interval": trade["interval"],
+                            "side": trade["side"],
+                            "exit_price": exec_price,
+                            "pnl": net_pnl,
+                            "pnl_pct": pnl_pct,
+                            "sim_trade_id": trade["id"],
+                        },
+                    )
+
+                    logger.info(
+                        "SimTrade %d LIQUIDATED (candle): %s %s exec=%.6f pnl=%.4f",
+                        trade["id"],
+                        trade["side"],
+                        trade["symbol"],
+                        exec_price,
+                        net_pnl,
+                    )
+                    continue  # next trade in group; don't run strategy/stop logic
 
             signals = strategy.on_candle(t_last, candle, state)
 
