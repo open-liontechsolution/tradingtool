@@ -141,6 +141,69 @@ export default function TradeReviewChart({ symbol, interval, startMs, endMs, tra
           // lightweight-charts requires markers sorted by time
           markers.sort((a, b) => a.time - b.time)
           candleSeries.setMarkers(markers)
+
+          // ---- Stop-loss curves (#44): one line series per sim_trade with id +
+          // stop_base. Fetches the trailing-stop history; renders a stepped
+          // segment per move. Backtest trades (no id) are skipped.
+          await Promise.all(
+            trades.map(async (trade) => {
+              if (cancelled) return
+              if (!trade.id || trade.stop_base == null) return
+              const initialStop = parseFloat(trade.stop_base)
+              const entryTimeS = Math.floor(Number(trade.entry_time) / 1000)
+              const exitTimeS = trade.exit_time
+                ? Math.floor(Number(trade.exit_time) / 1000)
+                : ohlcData[ohlcData.length - 1]?.time
+              if (!entryTimeS || !exitTimeS) return
+
+              let moves = []
+              try {
+                const r = await apiFetch(`/api/sim-trades/${trade.id}/stop-moves`)
+                if (r.ok) moves = (await r.json()).stop_moves ?? []
+              } catch {
+                // silent — chart still renders without trailing line
+              }
+              if (cancelled || !chartRef.current) return
+
+              // Build stepped points: [entry, initial_stop] → at each move
+              // candle_time, two points (prev level then new level) to draw
+              // the vertical step → final point at exit_time at the last
+              // active level.
+              const points = []
+              let level = initialStop
+              points.push({ time: entryTimeS, value: level })
+              for (const m of moves) {
+                const t = Math.floor(Number(m.candle_time) / 1000)
+                if (t <= entryTimeS || t > exitTimeS) continue
+                // Hold previous level up to the move's candle, then jump.
+                points.push({ time: t, value: level })
+                level = parseFloat(m.new_stop_base)
+                points.push({ time: t, value: level })
+              }
+              // Close the last segment at exit_time.
+              if (points[points.length - 1].time !== exitTimeS) {
+                points.push({ time: exitTimeS, value: level })
+              }
+              // De-duplicate adjacent points sharing the same time (keep the
+              // last value so the visual jump renders).
+              const compact = []
+              for (const p of points) {
+                const prev = compact[compact.length - 1]
+                if (prev && prev.time === p.time) compact[compact.length - 1] = p
+                else compact.push(p)
+              }
+
+              const stopSeries = chartRef.current.addLineSeries({
+                color: 'rgba(245, 158, 11, 0.85)',  // amber, distinct from entry/exit
+                lineWidth: 2,
+                lineStyle: 2,  // dashed
+                priceLineVisible: false,
+                lastValueVisible: false,
+                title: `Stop · #${trade.id}`,
+              })
+              stopSeries.setData(compact)
+            })
+          )
         }
 
         chart.timeScale().fitContent()
@@ -197,6 +260,8 @@ export default function TradeReviewChart({ symbol, interval, startMs, endMs, tra
           <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Exit (profit)</span>
           <span style={{ width: 10, height: 10, borderRadius: '50%', background: '#f59e0b', display: 'inline-block', marginLeft: 8 }} />
           <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Exit (loss)</span>
+          <span style={{ width: 14, height: 0, borderTop: '2px dashed rgba(245, 158, 11, 0.85)', display: 'inline-block', marginLeft: 8 }} />
+          <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Stop level (sim trades)</span>
         </div>
       </div>
 

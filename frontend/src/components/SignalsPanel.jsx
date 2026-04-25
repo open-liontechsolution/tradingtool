@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import { apiFetch } from '../auth/apiFetch'
+import TradeReviewChart from './TradeReviewChart'
 
 const PAIRS = [
   'BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'XRPUSDT',
@@ -563,7 +564,7 @@ function SimTradesList({ trades, onClose }) {
                 {isExpanded && (
                   <tr>
                     <td colSpan={14} style={{ background: 'var(--surface-1)', padding: 'var(--space-3)' }}>
-                      <StopMovesDetail moves={moves} loading={loadingMoves && moves === undefined} />
+                      <SimTradeReview trade={t} moves={moves} loadingMoves={loadingMoves && moves === undefined} />
                     </td>
                   </tr>
                 )}
@@ -572,6 +573,59 @@ function SimTradesList({ trades, onClose }) {
           })}
         </tbody>
       </table>
+    </div>
+  )
+}
+
+function SimTradeReview({ trade, moves, loadingMoves }) {
+  // Capture "now" once at mount so the render function stays pure for the
+  // React Compiler. Open trades (no exit_time) chart up to this snapshot.
+  const [nowMs] = useState(() => Date.now())
+
+  const { startMs, endMs } = useMemo(() => {
+    const stepBy = {
+      '1h': 60 * 60 * 1000,
+      '2h': 2 * 60 * 60 * 1000,
+      '4h': 4 * 60 * 60 * 1000,
+      '6h': 6 * 60 * 60 * 1000,
+      '8h': 8 * 60 * 60 * 1000,
+      '12h': 12 * 60 * 60 * 1000,
+      '1d': 24 * 60 * 60 * 1000,
+      '3d': 3 * 24 * 60 * 60 * 1000,
+      '1w': 7 * 24 * 60 * 60 * 1000,
+      '1M': 30 * 24 * 60 * 60 * 1000,
+    }
+    const STEP_MS = stepBy[trade.interval] || 24 * 60 * 60 * 1000
+    const entryMs = Number(trade.entry_time) || nowMs
+    const exitMs = Number(trade.exit_time) || nowMs
+    return {
+      startMs: Math.max(0, entryMs - 50 * STEP_MS),
+      endMs: exitMs + 10 * STEP_MS,
+    }
+  }, [trade.interval, trade.entry_time, trade.exit_time, nowMs])
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
+      {trade.entry_time && (
+        <TradeReviewChart
+          symbol={trade.symbol}
+          interval={trade.interval}
+          startMs={startMs}
+          endMs={endMs}
+          trades={[{
+            id: trade.id,
+            side: trade.side,
+            entry_time: trade.entry_time,
+            exit_time: trade.exit_time ?? endMs,
+            entry_price: trade.entry_price,
+            exit_price: trade.exit_price,
+            pnl: trade.pnl,
+            exit_reason: trade.exit_reason,
+            stop_base: trade.stop_base,
+          }]}
+        />
+      )}
+      <StopMovesDetail moves={moves} loading={loadingMoves} />
     </div>
   )
 }
