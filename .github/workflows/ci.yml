@@ -64,6 +64,27 @@ jobs:
       - name: Run tests
         run: pytest tests/ -v --tb=short
 
+  test-parity:
+    name: Parity harness (slow)
+    runs-on: ubuntu-latest
+    # Non-blocking: replays committed slot fixtures through both engines and
+    # asserts trade-log parity. ~2-3 minutes. We don't want a parity
+    # divergence to block unrelated PRs while the harness stabilises; promote
+    # to required once it's been green for a few weeks.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Run slow parity tests
+        run: pytest -m slow tests/integration/test_parity.py -v --tb=short
+
   build-frontend:
     name: Build frontend (Vite)
     runs-on: ubuntu-latest

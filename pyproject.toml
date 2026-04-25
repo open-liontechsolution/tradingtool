@@ -1,0 +1,8 @@
+[tool.pytest.ini_options]
+# Default run excludes the parity harness (large fixtures, ~minute per slot).
+# CI has a separate non-blocking job that runs `pytest -m slow`.
+addopts = "-m 'not slow'"
+markers = [
+    "slow: parity harness and other slot replays — excluded from default `pytest -q`. Run with `pytest -m slow` to include.",
+]
+asyncio_mode = "strict"

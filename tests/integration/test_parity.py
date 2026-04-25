@@ -286,30 +286,22 @@ def assert_trade_logs_equal(bt_log: list[dict], live_log: list[dict], price_tol:
 
 
 # ---------------------------------------------------------------------------
-# Tests — slot A
+# Parametrised harness: slot × strategy
 # ---------------------------------------------------------------------------
+#
+# Each (slot, strategy) pair is a separate test case so a divergence on one
+# scenario doesn't mask the others. Tests are gated behind ``slow`` because
+# each replays a full slot end-to-end (~30s on slot A, more on denser slots).
+# Run with ``pytest -m slow`` (default ``pytest -q`` excludes them; CI has a
+# dedicated non-blocking job).
 
 
-@pytest.mark.asyncio
-async def test_slot_a_breakout_close_current_default():
-    """Slot A × breakout × close_current produces matching trade logs.
-
-    ``close_current`` is the execution mode where the engines line up cleanly:
-    both fill entry and exit at the close of the trigger candle, so exit_price
-    parity is exact. ``open_next`` has a separate gap to track (backtest's exit
-    fills at the *current* candle's open while live fills at close — see
-    backtest_engine.py).
-    """
-    slot = _load_slot("slot_a")
-    symbol = slot["symbol"]
-    interval = slot["interval"]
-    candles = slot["candles"]
-    assert len(candles) > 100, "slot A fixture too small"
-
-    await init_db()
-    await _bulk_insert_klines(symbol, interval, candles)
-
-    strategy_params = {
+# Strategy → params map. ``modo_ejecucion=close_current`` is the only mode
+# with full engine parity post-#49 (open_next has a residual exit-fill gap
+# that's its own follow-up). Strategy params are kept conservative so the
+# scenarios actually generate trades on each slot's price action.
+_STRATEGY_PARAMS = {
+    "breakout": {
         "N_entrada": 20,
         "M_salida": 10,
         "stop_pct": 0.05,
@@ -318,52 +310,8 @@ async def test_slot_a_breakout_close_current_default():
         "habilitar_short": True,
         "salida_por_ruptura": True,
         "coste_total_bps": 0.0,
-    }
-    portfolio = 10_000.0
-    cost_bps = 0.0
-
-    config = await _insert_config(
-        symbol=symbol,
-        interval=interval,
-        strategy="breakout",
-        params=strategy_params,
-        portfolio=portfolio,
-        cost_bps=cost_bps,
-    )
-
-    # Backtest over the full slot range
-    start_ms = int(candles[0]["open_time"])
-    end_ms = int(candles[-1]["open_time"]) + INTERVAL_MS[interval]
-    bt_result = await run_backtest(
-        symbol=symbol,
-        interval=interval,
-        start_ms=start_ms,
-        end_ms=end_ms,
-        strategy_name="breakout",
-        params=strategy_params,
-        initial_capital=portfolio,
-    )
-    assert bt_result.error is None, f"backtest error: {bt_result.error}"
-    assert not bt_result.liquidated, "backtest liquidated unexpectedly"
-
-    # Live replay over the same slot
-    live_log = await _run_live_replay(config, candles, interval, warmup=0)
-
-    assert_trade_logs_equal(bt_result.trade_log, live_log)
-
-
-@pytest.mark.asyncio
-async def test_slot_a_breakout_trailing_close_current():
-    """Slot A × breakout_trailing × close_current: trailing move_stop parity (#49)."""
-    slot = _load_slot("slot_a")
-    symbol = slot["symbol"]
-    interval = slot["interval"]
-    candles = slot["candles"]
-
-    await init_db()
-    await _bulk_insert_klines(symbol, interval, candles)
-
-    strategy_params = {
+    },
+    "breakout_trailing": {
         "N_entrada": 20,
         "M_salida": 10,
         "stop_pct": 0.05,
@@ -373,14 +321,47 @@ async def test_slot_a_breakout_trailing_close_current():
         "habilitar_short": True,
         "salida_por_ruptura": True,
         "coste_total_bps": 0.0,
-    }
+    },
+    "support_resistance": {
+        "reversal_pct": 0.03,
+        "stop_pct": 0.05,
+        "modo_ejecucion": "close_current",
+        "habilitar_long": True,
+        "habilitar_short": True,
+        "coste_total_bps": 0.0,
+    },
+    "support_resistance_trailing": {
+        "reversal_pct": 0.03,
+        "stop_pct": 0.05,
+        "modo_ejecucion": "close_current",
+        "habilitar_long": True,
+        "habilitar_short": True,
+        "coste_total_bps": 0.0,
+    },
+}
+
+
+_SLOTS = ["slot_a", "slot_b", "slot_c"]
+_STRATEGIES = list(_STRATEGY_PARAMS.keys())
+
+
+async def _run_parity_case(slot_name: str, strategy_name: str) -> None:
+    slot = _load_slot(slot_name)
+    symbol = slot["symbol"]
+    interval = slot["interval"]
+    candles = slot["candles"]
+
+    await init_db()
+    await _bulk_insert_klines(symbol, interval, candles)
+
+    strategy_params = dict(_STRATEGY_PARAMS[strategy_name])
     portfolio = 10_000.0
     cost_bps = 0.0
 
     config = await _insert_config(
         symbol=symbol,
         interval=interval,
-        strategy="breakout_trailing",
+        strategy=strategy_name,
         params=strategy_params,
         portfolio=portfolio,
         cost_bps=cost_bps,
@@ -393,13 +374,25 @@ async def test_slot_a_breakout_trailing_close_current():
         interval=interval,
         start_ms=start_ms,
         end_ms=end_ms,
-        strategy_name="breakout_trailing",
+        strategy_name=strategy_name,
         params=strategy_params,
         initial_capital=portfolio,
     )
     assert bt_result.error is None, f"backtest error: {bt_result.error}"
-    assert not bt_result.liquidated
+    assert not bt_result.liquidated, f"backtest liquidated unexpectedly on {slot_name}/{strategy_name}"
 
     live_log = await _run_live_replay(config, candles, interval, warmup=0)
 
     assert_trade_logs_equal(bt_result.trade_log, live_log)
+
+
+@pytest.mark.slow
+@pytest.mark.asyncio
+@pytest.mark.parametrize("slot_name", _SLOTS)
+@pytest.mark.parametrize("strategy_name", _STRATEGIES)
+async def test_parity_slot_strategy(slot_name: str, strategy_name: str) -> None:
+    """Replays slot × strategy through both engines and asserts trade-log parity."""
+    fixture_path = FIXTURE_DIR / f"{slot_name}.json.gz"
+    if not fixture_path.exists():
+        pytest.skip(f"fixture {fixture_path.name} not present — regenerate with the matching seeder script")
+    await _run_parity_case(slot_name, strategy_name)
