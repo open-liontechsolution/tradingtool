@@ -38,7 +38,7 @@ import pytest
 from backend.backtest_engine import run_backtest
 from backend.database import get_db, init_db
 from backend.download_engine import INTERVAL_MS
-from backend.live_tracker import _check_candle_close_exits, _fill_pending_entries
+from backend.live_tracker import _check_candle_close_exits, _fill_pending_entries, _fill_pending_exits
 from backend.signal_engine import scan_config
 
 FIXTURE_DIR = Path(__file__).resolve().parent.parent / "fixtures" / "parity"
@@ -214,15 +214,25 @@ async def _run_live_replay(
             patch("backend.signal_engine.ensure_candles", ensure_mock),
             patch("backend.live_tracker.ensure_candles", ensure_mock),
         ):
-            # 1. Fill pending entries from the prior cycle at this candle's open
-            #    (open_next semantics: trigger at candles[closed_idx-1], fill at closed_idx.open).
+            # Order matters — mirrors per-candle ordering in real-time live:
+            # 1. Fill pending entries (entry signals deferred from the prior
+            #    cycle fill at this candle's open).
             await _fill_pending_entries()
 
-            # 2. Evaluate exits on the just-closed candle.
+            # 2. Evaluate exits on the just-closed candle. May queue
+            #    pending_exit (open_next mode) or close immediately
+            #    (close_current).
             await _check_candle_close_exits(interval)
 
-            # 3. Scan for new entry signal on the just-closed candle.
+            # 3. Scan for new entries. Runs BEFORE _fill_pending_exits so
+            #    that a trade just queued as pending_exit blocks scan in the
+            #    same iteration via `_has_active_trade` — matching backtest's
+            #    `exit_executed` short-circuit in open_next mode.
             await scan_config({**config})
+
+            # 4. Fill pending exits (open_next): close at this candle's open.
+            #    No-op in close_current.
+            await _fill_pending_exits()
 
     # Iterate up to the second-to-last candle. The very last candle has no
     # successor to fill into, so we stop one short. ``warmup`` is honoured for
@@ -357,6 +367,7 @@ async def _run_parity_case(
     leverage: float = 1.0,
     maintenance_margin_pct: float = 0.005,
     expect_liquidation: bool = False,
+    execution_mode: str = "close_current",
 ) -> None:
     slot = _load_slot(slot_name)
     symbol = slot["symbol"]
@@ -367,6 +378,7 @@ async def _run_parity_case(
     await _bulk_insert_klines(symbol, interval, candles)
 
     strategy_params = dict(_STRATEGY_PARAMS[strategy_name])
+    strategy_params["modo_ejecucion"] = execution_mode
     if leverage > 1.0:
         # backtest_engine reads leverage + maintenance_margin_pct from params;
         # live reads them from signal_configs columns. Mirror both so the two
@@ -417,6 +429,29 @@ async def test_parity_slot_strategy(slot_name: str, strategy_name: str) -> None:
     if not fixture_path.exists():
         pytest.skip(f"fixture {fixture_path.name} not present — regenerate with the matching seeder script")
     await _run_parity_case(slot_name, strategy_name)
+
+
+@pytest.mark.slow
+@pytest.mark.asyncio
+@pytest.mark.parametrize("slot_name", ["slot_a", "slot_b", "slot_c"])
+@pytest.mark.parametrize("strategy_name", _STRATEGIES)
+async def test_parity_open_next_slot_strategy(slot_name: str, strategy_name: str) -> None:
+    """Slot × strategy × modo_ejecucion=open_next — exercises deferred fills (#58 Gap 2).
+
+    Both backtest and live now defer entries AND exits to the next candle's
+    open. Backtest queues ``pending_entry`` / ``pending_exit`` and fills on
+    the next iteration; live persists ``status='pending_exit'`` with
+    ``pending_exit_reason`` and closes via ``_fill_pending_exits`` at the
+    next candle's open. Trade logs match bit-exact.
+
+    Slot D (leveraged) is excluded — leverage parity already covered by
+    ``test_parity_leveraged_slot_d`` in close_current; combining open_next
+    + leverage is well-covered by composition.
+    """
+    fixture_path = FIXTURE_DIR / f"{slot_name}.json.gz"
+    if not fixture_path.exists():
+        pytest.skip(f"fixture {fixture_path.name} not present — regenerate with the matching seeder script")
+    await _run_parity_case(slot_name, strategy_name, execution_mode="open_next")
 
 
 @pytest.mark.slow

@@ -334,6 +334,7 @@ async def init_db() -> None:
                 exit_price              REAL,
                 exit_time               INTEGER,
                 exit_reason             TEXT,
+                pending_exit_reason     TEXT,
                 status                  TEXT    NOT NULL DEFAULT 'pending_entry',
                 portfolio               REAL    NOT NULL,
                 invested_amount         REAL    NOT NULL,
@@ -455,6 +456,13 @@ async def init_db() -> None:
             "ON notification_log (event_type, reference_type, reference_id, channel)"
         )
         await db.commit()
+
+        # --- pending_exit lifecycle for open_next mode (#58 Gap 2) ---
+        cursor = await db.execute("PRAGMA table_info(sim_trades)")
+        sim_cols = {row[1] for row in await cursor.fetchall()}
+        if "pending_exit_reason" not in sim_cols:
+            await db.execute("ALTER TABLE sim_trades ADD COLUMN pending_exit_reason TEXT")
+            await db.commit()
 
         # --- leverage liquidation columns (#50) ---
         cursor = await db.execute("PRAGMA table_info(signal_configs)")

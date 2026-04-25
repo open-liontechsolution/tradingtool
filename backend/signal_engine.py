@@ -58,10 +58,16 @@ async def _get_active_configs() -> list[dict]:
 
 
 async def _has_active_trade(config_id: int) -> bool:
-    """Return True if there is already a pending or open sim_trade for this config."""
+    """Return True if there is already a pending or open sim_trade for this config.
+
+    Includes ``pending_exit`` (open_next mode, #58 Gap 2) — the trade is
+    structurally still active until the deferred fill completes. Without this
+    inclusion, scan_config could open a parallel entry between the exit
+    signal and the fill.
+    """
     async with get_db() as db:
         cursor = await db.execute(
-            "SELECT 1 FROM sim_trades WHERE config_id = ? AND status IN ('pending_entry', 'open')",
+            "SELECT 1 FROM sim_trades WHERE config_id = ? AND status IN ('pending_entry', 'open', 'pending_exit')",
             (config_id,),
         )
         return await cursor.fetchone() is not None
@@ -208,7 +214,15 @@ async def scan_config(config: dict) -> None:
         return
 
     # Skip entry signal if a trade just closed on the same candle (mirror backtest).
-    if await _has_trade_closed_on_candle(config["id"], last_closed):
+    # Only applies to close_current mode: in close_current the exit fires AND fills
+    # on the same candle, so backtest's exit_executed short-circuit blocks the
+    # entry block in that iteration. In open_next the exit *fires* on candle t
+    # but *fills* on t+1.open — backtest's strategy at iter t+1 (post-fill) is
+    # free to emit a new entry, and live's scan_config should mirror that.
+    # ``_has_active_trade`` (which now includes pending_exit) handles the
+    # exit-iteration block in open_next.
+    execution_mode = params.get("modo_ejecucion", "open_next")
+    if execution_mode == "close_current" and await _has_trade_closed_on_candle(config["id"], last_closed):
         logger.debug(
             "Config %d had a trade close on candle %d, skipping entry scan",
             config["id"],

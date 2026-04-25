@@ -690,7 +690,21 @@ class TestCandleCloseExit:
     async def test_exit_signal_closes_trade_at_close_price(self):
         """Strategy exit_long signal closes the trade at candle close price."""
         await _setup_db()
-        config = await _insert_config()
+        # close_current: tests immediate close-at-close behaviour. open_next
+        # defers via pending_exit (#58 Gap 2) and is covered by the parity
+        # harness instead.
+        config = await _insert_config(
+            params=json.dumps(
+                {
+                    "N_entrada": 5,
+                    "M_salida": 3,
+                    "stop_pct": 0.02,
+                    "salida_por_ruptura": True,
+                    "modo_ejecucion": "close_current",
+                },
+                sort_keys=True,
+            )
+        )
 
         stop_base = 96.04
         entry_price = 125.0
@@ -791,7 +805,20 @@ class TestCandleCloseExit:
     async def test_stop_on_candle_close_fallback(self):
         """Stop detected via candle Low on close is labeled 'stop_candle'."""
         await _setup_db()
-        config = await _insert_config()
+        # close_current: see test_exit_signal_closes_trade_at_close_price
+        # for why we set this explicitly.
+        config = await _insert_config(
+            params=json.dumps(
+                {
+                    "N_entrada": 5,
+                    "M_salida": 3,
+                    "stop_pct": 0.02,
+                    "salida_por_ruptura": True,
+                    "modo_ejecucion": "close_current",
+                },
+                sort_keys=True,
+            )
+        )
 
         stop_base = 96.04
         entry_price = 125.0
@@ -979,9 +1006,24 @@ class TestFullTradeCycle:
 
     @pytest.mark.asyncio
     async def test_full_cycle_breakout_to_exit_signal(self):
-        """Complete flow: scan detects breakout → entry filled → candle-close exit signal."""
+        """Complete flow: scan detects breakout → entry filled → candle-close exit signal.
+
+        Uses close_current mode for an immediate close-at-close. open_next mode
+        is exercised by the parity harness which drives _fill_pending_exits.
+        """
         await _setup_db()
-        config = await _insert_config()
+        config = await _insert_config(
+            params=json.dumps(
+                {
+                    "N_entrada": 5,
+                    "M_salida": 3,
+                    "stop_pct": 0.02,
+                    "salida_por_ruptura": True,
+                    "modo_ejecucion": "close_current",
+                },
+                sort_keys=True,
+            )
+        )
         df_scan, breakout_time, _ = _make_breakout_df()
 
         # --- Step 1: Scan ---
@@ -995,8 +1037,21 @@ class TestFullTradeCycle:
             await scan_config(config)
 
         # --- Step 2: Fill entry ---
-        next_open = breakout_time + STEP_MS
+        # close_current mode fills at the *trigger* candle's close (= breakout
+        # candle in this test, close=125). Insert it so _fill_pending_entries
+        # can read the close.
         entry_price = 125.0
+        await _insert_kline(
+            {
+                "open_time": breakout_time,
+                "open": 100.0,
+                "high": 130.0,
+                "low": 99.0,
+                "close": entry_price,
+                "volume": 1000.0,
+            }
+        )
+        next_open = breakout_time + STEP_MS
         await _insert_kline(
             {"open_time": next_open, "open": entry_price, "high": 128.0, "low": 122.0, "close": 126.0, "volume": 1000.0}
         )
