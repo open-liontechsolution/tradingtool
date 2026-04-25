@@ -335,6 +335,140 @@ async def _fill_pending_entries() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Pending exit fill (open_next semantic, #58 Gap 2)
+# ---------------------------------------------------------------------------
+
+
+async def _fill_pending_exits() -> None:
+    """Close SimTrades that hit ``status='pending_exit'`` at next candle's open.
+
+    When the strategy emits an exit/stop signal on candle t close and the
+    config's ``modo_ejecucion`` is ``open_next``, ``_check_candle_close_exits``
+    flips the trade to ``pending_exit`` and stores the reason. This function
+    looks up the open of candle t+1 (= entry_time-aligned candle following
+    the one that fired the signal — concretely the candle whose ``open_time``
+    equals the signal candle's ``open_time + step_ms``) and closes the trade
+    there with the stored reason.
+
+    The "signal candle" isn't tracked separately; we use the latest closed
+    candle as of the call time. In the harness this is deterministic; in
+    real-time the function is called once per cycle and naturally fills the
+    pending exit on the next pass after the candle closes.
+    """
+    async with get_db() as db:
+        cursor = await db.execute(
+            """SELECT st.id, st.symbol, st.interval, st.side, st.signal_id,
+                      st.entry_price, st.entry_time, st.quantity, st.portfolio,
+                      st.fees, st.config_id, st.pending_exit_reason,
+                      sc.cost_bps
+               FROM sim_trades st
+               JOIN signal_configs sc ON st.config_id = sc.id
+               WHERE st.status = 'pending_exit'"""
+        )
+        rows = await cursor.fetchall()
+        cols = [d[0] for d in cursor.description]
+    pending = [dict(zip(cols, row, strict=False)) for row in rows]
+
+    if not pending:
+        return
+
+    now = _now_iso()
+
+    for trade in pending:
+        interval = trade["interval"]
+        step_ms = INTERVAL_MS.get(interval)
+        if step_ms is None:
+            continue
+
+        # The signal fired at the latest closed candle as of the previous
+        # _check_candle_close_exits call. We fill at the candle that comes
+        # AFTER it. The simplest invariant: the next candle's open_time is
+        # ``last_closed_open + step_ms`` where last_closed_open is the most
+        # recently closed candle as of *this* call. By the time we run here
+        # (a cycle later), the originally-signalling candle is at least
+        # one step ago — so its successor is the *current or earlier*
+        # candle. We find it by reading the latest closed candle's open.
+        current_open = _current_candle_open(interval)
+        target_open = current_open  # fill at the open of the now-current candle
+
+        async with get_db() as db:
+            cursor = await db.execute(
+                "SELECT open FROM klines WHERE symbol = ? AND interval = ? AND open_time = ?",
+                (trade["symbol"], interval, target_open),
+            )
+            row = await cursor.fetchone()
+        if row is None:
+            # Candle not yet ingested — try again next cycle.
+            continue
+
+        exec_price = float(row[0])
+        entry_price = float(trade["entry_price"])
+        quantity = float(trade["quantity"])
+        cost_factor = float(trade["cost_bps"]) / 10_000.0
+        side = trade["side"]
+        gross_pnl = quantity * (exec_price - entry_price) if side == "long" else quantity * (entry_price - exec_price)
+        exit_fee = abs(quantity * exec_price) * cost_factor
+        net_pnl = gross_pnl - exit_fee
+        total_fees = float(trade["fees"] or 0) + exit_fee
+        portfolio = float(trade["portfolio"])
+        pnl_pct = net_pnl / portfolio if portfolio > 0 else 0.0
+        exit_reason = trade.get("pending_exit_reason") or "exit_signal"
+
+        async with get_db() as db:
+            await db.execute(
+                """UPDATE sim_trades
+                   SET exit_price = ?, exit_time = ?, exit_reason = ?,
+                       pending_exit_reason = NULL,
+                       status = 'closed', pnl = ?, pnl_pct = ?, fees = ?,
+                       updated_at = ?
+                   WHERE id = ?""",
+                (exec_price, target_open, exit_reason, net_pnl, pnl_pct, total_fees, now, trade["id"]),
+            )
+            await db.execute(
+                "UPDATE signals SET status = 'closed' WHERE id = ?",
+                (trade["signal_id"],),
+            )
+            await _apply_pnl_to_equity(db, trade["config_id"], net_pnl, now)
+            await db.commit()
+
+        await _maybe_mark_blown(trade["config_id"], now)
+
+        event_type = "stop_hit" if exit_reason in ("stop_candle", "stop_intrabar") else "exit_signal"
+        payload: dict = {
+            "symbol": trade["symbol"],
+            "interval": trade["interval"],
+            "side": side,
+            "exit_price": exec_price,
+            "pnl": net_pnl,
+            "pnl_pct": pnl_pct,
+            "sim_trade_id": trade["id"],
+        }
+        if exit_reason == "stop_candle":
+            payload["exit_reason"] = "stop_candle"
+        else:
+            duration = max((target_open - int(trade["entry_time"])) // step_ms, 0)
+            payload["duration_candles"] = duration
+
+        await notify_event(
+            event_type=event_type,
+            config_id=trade["config_id"],
+            reference_type="sim_trade",
+            reference_id=trade["id"],
+            payload=payload,
+        )
+
+        logger.info(
+            "SimTrade %d %s (deferred to next open): %s %s exec=%.6f pnl=%.4f",
+            trade["id"],
+            exit_reason.upper(),
+            side,
+            trade["symbol"],
+            exec_price,
+            net_pnl,
+        )
+
+
+# ---------------------------------------------------------------------------
 # Intrabar stop check
 # ---------------------------------------------------------------------------
 
@@ -603,6 +737,22 @@ async def _check_candle_close_exits(interval: str | None = None) -> None:
                JOIN signal_configs sc ON st.config_id = sc.id
                WHERE st.status = 'open'"""
 
+    async def _queue_pending_exit(trade_id: int, reason: str) -> None:
+        """Mark a trade for deferred exit (open_next mode, #58 Gap 2).
+
+        The trade stays at status='pending_exit' until ``_fill_pending_exits``
+        closes it at the next candle's open. No PnL / equity / notification
+        is emitted here — that all happens at fill time.
+        """
+        async with get_db() as db:
+            await db.execute(
+                """UPDATE sim_trades
+                   SET status = 'pending_exit', pending_exit_reason = ?, updated_at = ?
+                   WHERE id = ?""",
+                (reason, _now_iso(), trade_id),
+            )
+            await db.commit()
+
     async with get_db() as db:
         if interval is not None:
             cursor = await db.execute(base_query + " AND st.interval = ?", (interval,))
@@ -634,6 +784,11 @@ async def _check_candle_close_exits(interval: str | None = None) -> None:
 
         # Load candles for strategy evaluation
         params = json.loads(params_str) if isinstance(params_str, str) else params_str
+        # Read execution_mode once per group — applies to all trades sharing
+        # the same config params (which is the group key here).
+        group_execution_mode = params.get("modo_ejecucion", "open_next")
+        if group_execution_mode not in ("open_next", "close_current"):
+            group_execution_mode = "open_next"
         warmup = 600
         start_ms = last_closed_open - (warmup * step_ms)
         end_ms = last_closed_open + step_ms
@@ -760,6 +915,12 @@ async def _check_candle_close_exits(interval: str | None = None) -> None:
 
             for sig in signals:
                 if sig.action in ("exit_long", "exit_short"):
+                    if group_execution_mode == "open_next":
+                        # Defer to next candle's open (#58 Gap 2). Persisted
+                        # via pending_exit; fill happens in _fill_pending_exits.
+                        await _queue_pending_exit(trade["id"], "exit_signal")
+                        break
+
                     exec_price = float(candle["close"])
                     entry_price = float(trade["entry_price"])
                     quantity = float(trade["quantity"])
@@ -826,6 +987,11 @@ async def _check_candle_close_exits(interval: str | None = None) -> None:
                     break
 
                 elif sig.action in ("stop_long", "stop_short"):
+                    if group_execution_mode == "open_next":
+                        # Defer to next candle's open (#58 Gap 2).
+                        await _queue_pending_exit(trade["id"], "stop_candle")
+                        break
+
                     # Stop also detected on candle close via Low/High
                     # But intrabar check should have caught this; handle here
                     # as fallback using the candle's stop_base

@@ -70,6 +70,11 @@ async def run_backtest(
     trade_log: list[dict] = []
     state = PositionState()
     pending_entry: Signal | None = None  # deferred to next open
+    # Pending exit / stop signal (open_next semantic, #58 Gap 2). Holds the
+    # exit/stop signal raised by strategy.on_candle while still in the closing
+    # candle; fills at the NEXT candle's open. Liquidations don't queue here
+    # — they're intrabar events that fire immediately at liquidation_price.
+    pending_exit: Signal | None = None
     entry_equity: float = 0.0  # equity at moment of entry (before entry fee)
     # ``blown`` mirrors live's ``signal_configs.status='blown'``: once a trade
     # closes via liquidation, the account is gone and no new entries fire for
@@ -102,6 +107,39 @@ async def run_backtest(
         )
         return new_state, entry_fee, equity
 
+    def _close_trade(exec_price: float, exit_reason: str, exit_candle_idx: int, exit_candle: pd.Series) -> float:
+        """Close the open trade at ``exec_price``, append to trade_log, return new equity.
+
+        Used by both the immediate-close path (close_current mode) and the
+        deferred path (open_next mode, where the exit fills at the next
+        candle's open).
+        """
+        nonlocal state
+        pnl = _compute_pnl(state, exec_price, cost_factor, equity)
+        equity_after = equity + pnl
+        dur = exit_candle_idx - _find_entry_candle_idx(df, state.entry_time)
+        pnl_pct = (pnl / entry_equity * 100) if entry_equity > 0 else 0.0
+        trade_log.append(
+            {
+                "entry_time": state.entry_time,
+                "exit_time": int(exit_candle["open_time"]),
+                "side": state.side,
+                "direction": state.side,
+                "entry_price": state.entry_price,
+                "exit_price": exec_price,
+                "pnl": round(pnl, 4),
+                "pnl_pct": round(pnl_pct / 100, 6),
+                "fees": round(abs(pnl - _compute_pnl_no_fees(state, exec_price)), 4),
+                "exit_reason": exit_reason,
+                "duration_candles": max(dur, 0),
+                "equity_before": round(entry_equity, 4),
+                "equity_after": round(equity_after, 4),
+                "position_size": round(entry_equity, 4),
+            }
+        )
+        state = PositionState()
+        return equity_after
+
     n = len(df)
 
     for t in range(n):
@@ -110,6 +148,20 @@ async def run_backtest(
         high_price = float(candle["high"])
         low_price = float(candle["low"])
         close_price = float(candle["close"])
+
+        # Execute deferred exit from the previous candle at this candle's open
+        # (open_next semantic, #58 Gap 2). Liquidations are intrabar events and
+        # never queue here, so this only handles exit_signal / stop_long /
+        # stop_short. Note: a pending_exit takes priority over a pending_entry
+        # — they can't physically coexist (exit only queues with state=open;
+        # entry only queues with state=flat), but if they did the exit goes
+        # first and the entry would have to be invalidated. In practice, we
+        # only ever have one at a time.
+        if pending_exit is not None and execution_mode == "open_next":
+            sig = pending_exit
+            pending_exit = None
+            normalized = "exit_signal" if sig.action in ("exit_long", "exit_short") else sig.action
+            equity = _close_trade(open_price, normalized, t, candle)
 
         # Execute deferred entry from previous candle at current open
         if pending_entry is not None and execution_mode == "open_next":
@@ -138,79 +190,48 @@ async def run_backtest(
         # Intrabar liquidation check (#58 Gap 1). Mirrors live_tracker: if price
         # crosses liquidation_price BEFORE the stop, the trade closes at the
         # liquidation price with exit_reason='liquidated'. Skipped for
-        # unleveraged trades (state.liquidation_price is None).
+        # unleveraged trades (state.liquidation_price is None). Liquidations
+        # never defer (open_next doesn't apply) — the exchange would close
+        # the position intrabar.
         if state.side != "flat" and state.liquidation_price is not None:
             liq = state.liquidation_price
             liquidated = (state.side == "long" and low_price <= liq) or (state.side == "short" and high_price >= liq)
             if liquidated:
-                exec_price = liq
-                pnl = _compute_pnl(state, exec_price, cost_factor, equity)
-                equity_after = equity + pnl
-                equity += pnl
-                dur = t - _find_entry_candle_idx(df, state.entry_time)
-                pnl_pct = (pnl / entry_equity * 100) if entry_equity > 0 else 0.0
-                trade_log.append(
-                    {
-                        "entry_time": state.entry_time,
-                        "exit_time": int(candle["open_time"]),
-                        "side": state.side,
-                        "direction": state.side,
-                        "entry_price": state.entry_price,
-                        "exit_price": exec_price,
-                        "pnl": round(pnl, 4),
-                        "pnl_pct": round(pnl_pct / 100, 6),
-                        "fees": round(abs(pnl - _compute_pnl_no_fees(state, exec_price)), 4),
-                        "exit_reason": "liquidated",
-                        "duration_candles": max(dur, 0),
-                        "equity_before": round(entry_equity, 4),
-                        "equity_after": round(equity_after, 4),
-                        "position_size": round(entry_equity, 4),
-                    }
-                )
-                state = PositionState()
+                equity = _close_trade(liq, "liquidated", t, candle)
                 exit_executed = True
                 blown = True
-                # Drop any pending_entry deferred from the previous candle —
-                # the account is blown, those signals are dead.
+                # Drop any pending_entry / pending_exit — the account is blown,
+                # those signals are dead.
                 pending_entry = None
+                pending_exit = None
                 result.liquidated = True
 
         for sig in signals:
             if exit_executed:
                 break
             if sig.action in ("stop_long", "stop_short", "exit_long", "exit_short") and state.side != "flat":
-                # For stops: use stop_price, but if open is already past stop, use open
+                if execution_mode == "open_next":
+                    # Defer to the next candle's open (#58 Gap 2). The exit
+                    # signal is queued here; no equity / log change yet.
+                    # exit_executed=True so we don't process an entry signal
+                    # on this same candle.
+                    pending_exit = sig
+                    exit_executed = True
+                    break
+
+                # close_current: fill immediately on this candle.
+                # For stops with a gap (open already past stop), use open.
                 if sig.action == "stop_long":
                     exec_price = min(sig.price, open_price) if open_price < state.stop_price else sig.price
+                    exit_reason = "stop_long"
                 elif sig.action == "stop_short":
                     exec_price = max(sig.price, open_price) if open_price > state.stop_price else sig.price
+                    exit_reason = "stop_short"
                 else:
-                    exec_price = close_price if execution_mode == "close_current" else open_price
+                    exec_price = close_price
+                    exit_reason = sig.action  # exit_long | exit_short
 
-                pnl = _compute_pnl(state, exec_price, cost_factor, equity)
-                equity_after = equity + pnl
-                equity += pnl
-                dur = t - _find_entry_candle_idx(df, state.entry_time)
-                pnl_pct = (pnl / entry_equity * 100) if entry_equity > 0 else 0.0
-                trade_log.append(
-                    {
-                        "entry_time": state.entry_time,
-                        "exit_time": int(candle["open_time"]),
-                        "side": state.side,
-                        "direction": state.side,
-                        "entry_price": state.entry_price,
-                        "exit_price": exec_price,
-                        "pnl": round(pnl, 4),
-                        "pnl_pct": round(pnl_pct / 100, 6),
-                        "fees": round(abs(pnl - _compute_pnl_no_fees(state, exec_price)), 4),
-                        "exit_reason": sig.action,
-                        "duration_candles": max(dur, 0),
-                        "equity_before": round(entry_equity, 4),
-                        "equity_after": round(equity_after, 4),
-                        "position_size": round(entry_equity, 4),
-                    }
-                )
-                state = PositionState()
+                equity = _close_trade(exec_price, exit_reason, t, candle)
                 exit_executed = True
                 break
 
