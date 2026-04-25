@@ -137,7 +137,7 @@ def _format_entry(payload: dict[str, Any]) -> str:
         f"📈 *Entrada {escape_md(payload['side'].upper())}* · `{escape_md(payload['symbol'])}` · {escape_md(payload['interval'])}",
         f"Estrategia: `{escape_md(payload['strategy'])}`",
         f"Precio: `{_fmt_price(payload.get('entry_price'))}`",
-        f"Stop: `{_fmt_price(payload.get('stop_price'))}`  \\(auto\\-close `{_fmt_price(payload.get('stop_trigger'))}`\\)",
+        f"Stop: `{_fmt_price(payload.get('stop_price'))}`",
         f"Invertido: `{_fmt_price(payload.get('invested_amount'))}` USDT  \\(x{leverage_str}\\)",
     ]
     link = _trade_link(payload.get("sim_trade_id"))

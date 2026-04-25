@@ -159,7 +159,6 @@ function ConfigForm({ strategies, onCreated }) {
   const [interval, setInterval] = useState('1d')
   const [selectedStrat, setSelectedStrat] = useState('')
   const [paramValues, setParamValues] = useState({})
-  const [stopCrossPct, setStopCrossPct] = useState(0.02)
   const [costBps, setCostBps] = useState(10)
   const [portfolio, setPortfolio] = useState(10000)
   const [leverage, setLeverage] = useState(1)
@@ -198,7 +197,6 @@ function ConfigForm({ strategies, onCreated }) {
       const body = {
         symbol, interval, strategy: selectedStrat,
         params: paramValues,
-        stop_cross_pct: stopCrossPct,
         cost_bps: costBps,
         portfolio,
         ...(capitalMode === 'leverage'
@@ -299,17 +297,10 @@ function ConfigForm({ strategies, onCreated }) {
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-4)' }}>
         <div>
           <div className="section-title">Risk Parameters</div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-3)' }}>
-            <div className="form-group">
-              <label className="form-label">Stop Cross % (extra)</label>
-              <input type="number" className="form-control" value={stopCrossPct} min={0} step={0.005}
-                onChange={e => setStopCrossPct(parseFloat(e.target.value) || 0)} disabled={loading} />
-            </div>
-            <div className="form-group">
-              <label className="form-label">Cost (bps)</label>
-              <input type="number" className="form-control" value={costBps} min={0} step={1}
-                onChange={e => setCostBps(parseFloat(e.target.value) || 0)} disabled={loading} />
-            </div>
+          <div className="form-group">
+            <label className="form-label">Cost (bps)</label>
+            <input type="number" className="form-control" value={costBps} min={0} step={1}
+              onChange={e => setCostBps(parseFloat(e.target.value) || 0)} disabled={loading} />
           </div>
         </div>
         <div>
@@ -357,7 +348,6 @@ function ConfigsList({ configs, onToggle, onToggleTelegram, onDelete }) {
             <th>Interval</th>
             <th>Strategy</th>
             <th className="ta-right">Portfolio</th>
-            <th className="ta-right">Stop Cross %</th>
             <th className="ta-center">Active</th>
             <th className="ta-center" title="Enviar alertas a Telegram para esta configuración">Telegram</th>
             <th className="ta-center">Actions</th>
@@ -371,7 +361,6 @@ function ConfigsList({ configs, onToggle, onToggleTelegram, onDelete }) {
               <td>{c.interval}</td>
               <td>{c.strategy}</td>
               <td className="ta-right num-col">{fmtMoney(c.portfolio)}</td>
-              <td className="ta-right num-col">{fmtNum(c.stop_cross_pct * 100, 1)}%</td>
               <td className="ta-center">
                 <ToggleSwitch checked={c.active} onChange={(val) => onToggle(c.id, val)} />
               </td>
@@ -407,8 +396,7 @@ function SignalsList({ signals }) {
         lineHeight: 1.6,
       }}>
         💡 <strong style={{ color: 'var(--text-secondary)' }}>Entry (next open)</strong>: precio al que entrar en el exchange &nbsp;·&nbsp;
-        <strong style={{ color: 'var(--text-secondary)' }}>Stop Base (SL)</strong>: nivel de stop-loss para tu exchange &nbsp;·&nbsp;
-        <strong style={{ color: 'var(--text-secondary)' }}>Auto-close trigger</strong>: el sistema cierra el SimTrade aquí automáticamente (= Stop Base ± stop_cross_pct)
+        <strong style={{ color: 'var(--text-secondary)' }}>Stop (SL)</strong>: nivel de stop-loss para tu exchange — el sistema cierra aquí también el SimTrade.
       </div>
 
       <div style={{ overflowX: 'auto' }}>
@@ -421,8 +409,7 @@ function SignalsList({ signals }) {
               <th>Side</th>
               <th>Signal Candle</th>
               <th className="ta-right" title="Open price of the next candle — use this as your entry on the exchange">Entry (next open) ↗</th>
-              <th className="ta-right" title="Strategy stop-loss level — set this as your SL on the exchange">Stop Base (SL) 🛑</th>
-              <th className="ta-right" title="Auto-close trigger = Stop Base ± stop_cross_pct. The system closes the SimTrade here automatically.">Auto-close trigger</th>
+              <th className="ta-right" title="Strategy stop-loss level — set this as your SL on the exchange and the system closes the SimTrade here too">Stop (SL) 🛑</th>
               <th>Status</th>
               <th className="ta-center">Sim Trade</th>
               <th>Created</th>
@@ -450,7 +437,6 @@ function SignalsList({ signals }) {
                     {hasEntry ? fmtNum(s.entry_price, 4) : 'Pending…'}
                   </td>
                   <td className="ta-right num-col" style={{ fontFamily: 'var(--font-mono)' }}>{fmtNum(s.stop_price, 4)}</td>
-                  <td className="ta-right num-col" style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-muted)' }}>{fmtNum(s.stop_trigger_price, 4)}</td>
                   <td><StatusBadge status={s.status} /></td>
                   <td className="ta-center" style={{ fontSize: '0.78rem' }}>
                     {s.sim_trade_id
@@ -511,7 +497,7 @@ function SimTradesList({ trades, onClose }) {
             <th>Symbol</th>
             <th>Side</th>
             <th className="ta-right">Entry</th>
-            <th className="ta-right">Stop Trigger</th>
+            <th className="ta-right">Stop</th>
             <th className="ta-right">Exit</th>
             <th>Reason</th>
             <th className="ta-right">PnL</th>
@@ -548,7 +534,7 @@ function SimTradesList({ trades, onClose }) {
                     {t.side?.toUpperCase()}
                   </td>
                   <td className="ta-right num-col">{t.entry_price ? fmtNum(t.entry_price, 4) : '—'}</td>
-                  <td className="ta-right num-col">{fmtNum(t.stop_trigger, 4)}</td>
+                  <td className="ta-right num-col">{fmtNum(t.stop_base, 4)}</td>
                   <td className="ta-right num-col">{t.exit_price ? fmtNum(t.exit_price, 4) : '—'}</td>
                   <td>{t.exit_reason || '—'}</td>
                   <td className="ta-right num-col" style={{ color: pnlColor, fontWeight: 600 }}>{t.pnl != null ? fmtMoney(t.pnl) : '—'}</td>
@@ -588,10 +574,8 @@ function StopMovesDetail({ moves, loading }) {
         <thead>
           <tr>
             <th className="ta-right">#</th>
-            <th className="ta-right">Prev base</th>
-            <th className="ta-right">New base</th>
-            <th className="ta-right">Prev trigger</th>
-            <th className="ta-right">New trigger</th>
+            <th className="ta-right">Stop anterior</th>
+            <th className="ta-right">Stop nuevo</th>
             <th className="ta-right">Candle time</th>
             <th>Created at</th>
           </tr>
@@ -602,8 +586,6 @@ function StopMovesDetail({ moves, loading }) {
               <td className="ta-right num-col">{i + 1}</td>
               <td className="ta-right num-col">{fmtNum(m.prev_stop_base, 4)}</td>
               <td className="ta-right num-col">{fmtNum(m.new_stop_base, 4)}</td>
-              <td className="ta-right num-col">{fmtNum(m.prev_stop_trigger, 4)}</td>
-              <td className="ta-right num-col">{fmtNum(m.new_stop_trigger, 4)}</td>
               <td className="ta-right num-col">{new Date(m.candle_time).toISOString().replace('T', ' ').slice(0, 19)}</td>
               <td>{m.created_at}</td>
             </tr>

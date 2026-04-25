@@ -45,7 +45,6 @@ async def _insert_config(**overrides) -> int:
         "interval": "1h",
         "strategy": "breakout",
         "params": json.dumps({"N_entrada": 5, "M_salida": 3, "stop_pct": 0.02}, sort_keys=True),
-        "stop_cross_pct": 0.02,
         "portfolio": 10000.0,
         "invested_amount": None,
         "leverage": 1.0,
@@ -59,17 +58,16 @@ async def _insert_config(**overrides) -> int:
     async with get_db() as db:
         cursor = await db.execute(
             """INSERT INTO signal_configs
-                (symbol, interval, strategy, params, stop_cross_pct,
+                (symbol, interval, strategy, params,
                  portfolio, invested_amount, leverage, cost_bps,
                  polling_interval_s, active, last_processed_candle,
                  created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 defaults["symbol"],
                 defaults["interval"],
                 defaults["strategy"],
                 defaults["params"],
-                defaults["stop_cross_pct"],
                 defaults["portfolio"],
                 defaults["invested_amount"],
                 defaults["leverage"],
@@ -90,17 +88,18 @@ async def _insert_signal(
     trigger_time: int = 1000000,
     side: str = "long",
     stop_price: float = 95.0,
-    stop_trigger: float = 93.1,
+    **_legacy,
 ) -> int:
+    """Insert a signal. ``**_legacy`` swallows callers still passing stop_trigger=…."""
     now = _now_iso()
     async with get_db() as db:
         cursor = await db.execute(
             """INSERT INTO signals
                 (config_id, symbol, interval, strategy, side,
-                 trigger_candle_time, stop_price, stop_trigger_price,
+                 trigger_candle_time, stop_price,
                  status, created_at)
-               VALUES (?, 'BTCUSDT', '1h', 'breakout', ?, ?, ?, ?, 'active', ?)""",
-            (config_id, side, trigger_time, stop_price, stop_trigger, now),
+               VALUES (?, 'BTCUSDT', '1h', 'breakout', ?, ?, ?, 'active', ?)""",
+            (config_id, side, trigger_time, stop_price, now),
         )
         await db.commit()
         return cursor.lastrowid
@@ -114,22 +113,23 @@ async def _insert_sim_trade(
     entry_price: float = 100.0,
     entry_time: int = 1000000,
     stop_base: float = 95.0,
-    stop_trigger: float = 93.1,
     quantity: float = 100.0,
     portfolio: float = 10000.0,
     invested_amount: float = 10000.0,
     leverage: float = 1.0,
     fees: float = 10.0,
+    **_legacy,
 ) -> int:
+    """Insert a sim_trade. ``**_legacy`` swallows callers still passing stop_trigger=…."""
     now = _now_iso()
     async with get_db() as db:
         cursor = await db.execute(
             """INSERT INTO sim_trades
                 (signal_id, config_id, symbol, interval, side,
-                 entry_price, entry_time, stop_base, stop_trigger,
+                 entry_price, entry_time, stop_base,
                  status, portfolio, invested_amount, leverage,
                  quantity, fees, created_at, updated_at)
-               VALUES (?, ?, 'BTCUSDT', '1h', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, 'BTCUSDT', '1h', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 signal_id,
                 config_id,
@@ -137,7 +137,6 @@ async def _insert_sim_trade(
                 entry_price,
                 entry_time,
                 stop_base,
-                stop_trigger,
                 status,
                 portfolio,
                 invested_amount,
@@ -159,11 +158,11 @@ async def _insert_sim_trade(
 
 class TestIntrabarStop:
     @pytest.mark.asyncio
-    async def test_long_stop_triggered_when_price_below_trigger(self):
-        """Price below stop_trigger should close a long SimTrade."""
+    async def test_long_stop_triggered_when_price_below_stop_base(self):
+        """Price below stop_base should close a long SimTrade at the actual price (gap fill)."""
         await _setup_db()
         config_id = await _insert_config()
-        signal_id = await _insert_signal(config_id, stop_price=95.0, stop_trigger=93.1)
+        signal_id = await _insert_signal(config_id, stop_price=95.0)
         trade_id = await _insert_sim_trade(
             signal_id,
             config_id,
@@ -171,13 +170,12 @@ class TestIntrabarStop:
             side="long",
             entry_price=100.0,
             stop_base=95.0,
-            stop_trigger=93.1,
             quantity=100.0,
             portfolio=10000.0,
             invested_amount=10000.0,
         )
 
-        # Mock ticker to return price below stop_trigger (93.1)
+        # Mock ticker to return price below stop_base (95.0): gap → exec at price.
         with patch("backend.live_tracker.binance_client") as mock_client:
             mock_client.get_ticker_price = AsyncMock(return_value=92.0)
             mock_client.rate_limit = MagicMock()
@@ -194,12 +192,12 @@ class TestIntrabarStop:
 
         assert row[0] == "closed"
         assert row[1] == "stop_intrabar"
-        assert row[2] == pytest.approx(93.1, abs=0.01)  # exit at stop_trigger
+        assert row[2] == pytest.approx(92.0, abs=0.01)  # gap-fill at the actual price
         assert row[3] < 0  # losing trade
 
     @pytest.mark.asyncio
-    async def test_long_not_triggered_when_price_above_trigger(self):
-        """Price above stop_trigger should NOT close the trade."""
+    async def test_long_not_triggered_when_price_above_stop_base(self):
+        """Price above stop_base should NOT close the trade."""
         await _setup_db()
         config_id = await _insert_config()
         signal_id = await _insert_signal(config_id, stop_price=95.0, stop_trigger=93.1)
@@ -230,16 +228,14 @@ class TestIntrabarStop:
         assert row[0] == "open"
 
     @pytest.mark.asyncio
-    async def test_short_stop_triggered_when_price_above_trigger(self):
-        """Price above stop_trigger should close a short SimTrade."""
+    async def test_short_stop_triggered_when_price_above_stop_base(self):
+        """Price above stop_base should close a short SimTrade (gap fill at price)."""
         await _setup_db()
         config_id = await _insert_config()
-        # Short: stop_base=105, trigger=105*(1+0.02)=107.1
         signal_id = await _insert_signal(
             config_id,
             side="short",
             stop_price=105.0,
-            stop_trigger=107.1,
         )
         trade_id = await _insert_sim_trade(
             signal_id,
@@ -248,7 +244,6 @@ class TestIntrabarStop:
             side="short",
             entry_price=100.0,
             stop_base=105.0,
-            stop_trigger=107.1,
             quantity=100.0,
         )
 
@@ -261,22 +256,22 @@ class TestIntrabarStop:
 
         async with get_db() as db:
             cursor = await db.execute(
-                "SELECT status, exit_reason FROM sim_trades WHERE id = ?",
+                "SELECT status, exit_reason, exit_price FROM sim_trades WHERE id = ?",
                 (trade_id,),
             )
             row = await cursor.fetchone()
         assert row[0] == "closed"
         assert row[1] == "stop_intrabar"
+        assert row[2] == pytest.approx(108.0, abs=0.01)  # gap-fill at the actual price
 
     @pytest.mark.asyncio
-    async def test_short_not_triggered_when_price_below_trigger(self):
+    async def test_short_not_triggered_when_price_below_stop_base(self):
         await _setup_db()
         config_id = await _insert_config()
         signal_id = await _insert_signal(
             config_id,
             side="short",
             stop_price=105.0,
-            stop_trigger=107.1,
         )
         trade_id = await _insert_sim_trade(
             signal_id,
@@ -285,7 +280,6 @@ class TestIntrabarStop:
             side="short",
             entry_price=100.0,
             stop_base=105.0,
-            stop_trigger=107.1,
             quantity=100.0,
         )
 
@@ -346,14 +340,14 @@ class TestPnlCalculation:
         """A long stopped below entry should have negative PnL."""
         await _setup_db()
         config_id = await _insert_config(cost_bps=0.0)  # no fees for simplicity
-        signal_id = await _insert_signal(config_id, stop_trigger=93.1)
+        signal_id = await _insert_signal(config_id, stop_price=95.0)
         trade_id = await _insert_sim_trade(
             signal_id,
             config_id,
             status="open",
             side="long",
             entry_price=100.0,
-            stop_trigger=93.1,
+            stop_base=95.0,
             quantity=100.0,
             fees=0.0,
         )
@@ -371,8 +365,8 @@ class TestPnlCalculation:
                 (trade_id,),
             )
             row = await cursor.fetchone()
-        # pnl = quantity * (stop_trigger - entry_price) = 100 * (93.1 - 100) = -690
-        expected_pnl = 100.0 * (93.1 - 100.0)
+        # pnl = quantity * (price - entry_price) = 100 * (90 - 100) = -1000 (gap fill at price)
+        expected_pnl = 100.0 * (90.0 - 100.0)
         assert row[0] == pytest.approx(expected_pnl, abs=1.0)
         assert row[1] < 0
 
@@ -384,7 +378,6 @@ class TestPnlCalculation:
             config_id,
             side="short",
             stop_price=105.0,
-            stop_trigger=107.1,
         )
         trade_id = await _insert_sim_trade(
             signal_id,
@@ -393,7 +386,6 @@ class TestPnlCalculation:
             side="short",
             entry_price=100.0,
             stop_base=105.0,
-            stop_trigger=107.1,
             quantity=100.0,
             fees=0.0,
         )
@@ -411,8 +403,8 @@ class TestPnlCalculation:
                 (trade_id,),
             )
             row = await cursor.fetchone()
-        # pnl = quantity * (entry - stop_trigger) = 100 * (100 - 107.1) = -710
-        expected_pnl = 100.0 * (100.0 - 107.1)
+        # pnl = quantity * (entry - price) = 100 * (100 - 110) = -1000 (gap fill at price)
+        expected_pnl = 100.0 * (100.0 - 110.0)
         assert row[0] == pytest.approx(expected_pnl, abs=1.0)
 
 
@@ -477,8 +469,7 @@ def _trade_row(
     side="long",
     entry_price=100.0,
     stop_base=95.0,
-    stop_trigger=93.1,
-    stop_cross_pct=0.02,
+    **_legacy,
 ) -> dict:
     """Build the in-memory dict shape _check_candle_close_exits passes in."""
     return {
@@ -491,8 +482,6 @@ def _trade_row(
         "entry_price": entry_price,
         "entry_time": 1_000_000,
         "stop_base": stop_base,
-        "stop_trigger": stop_trigger,
-        "stop_cross_pct": stop_cross_pct,
         "quantity": 100.0,
         "portfolio": 10_000.0,
         "invested_amount": 10_000.0,
@@ -521,27 +510,25 @@ class TestApplyStopMoves:
 
         async with get_db() as db:
             cursor = await db.execute(
-                "SELECT stop_base, stop_trigger FROM sim_trades WHERE id = ?",
+                "SELECT stop_base FROM sim_trades WHERE id = ?",
                 (trade_id,),
             )
             trade_row = await cursor.fetchone()
             cursor = await db.execute(
-                """SELECT prev_stop_base, new_stop_base, prev_stop_trigger,
-                          new_stop_trigger, candle_time
+                """SELECT prev_stop_base, new_stop_base, candle_time
                    FROM sim_trade_stop_moves WHERE sim_trade_id = ?""",
                 (trade_id,),
             )
             move_row = await cursor.fetchone()
 
         assert trade_row[0] == pytest.approx(98.0)
-        assert trade_row[1] == pytest.approx(98.0 * (1.0 - 0.02))
         assert move_row is not None
         assert move_row[0] == pytest.approx(95.0)
         assert move_row[1] == pytest.approx(98.0)
-        assert move_row[4] == 1_100_000
+        assert move_row[2] == 1_100_000
 
-        # In-memory state mirrors the trigger for later same-candle checks.
-        assert state.stop_price == pytest.approx(98.0 * (1.0 - 0.02))
+        # In-memory state mirrors the new base for later same-candle checks.
+        assert state.stop_price == pytest.approx(98.0)
         mock_notify.assert_called_once()
         kwargs = mock_notify.call_args.kwargs
         assert kwargs["event_type"] == "stop_moved"
@@ -577,12 +564,11 @@ class TestApplyStopMoves:
 
         async with get_db() as db:
             cursor = await db.execute(
-                "SELECT stop_base, stop_trigger FROM sim_trades WHERE id = ?",
+                "SELECT stop_base FROM sim_trades WHERE id = ?",
                 (trade_id,),
             )
             row = await cursor.fetchone()
         assert row[0] == pytest.approx(102.0)
-        assert row[1] == pytest.approx(102.0 * (1.0 + 0.02))
 
     @pytest.mark.asyncio
     async def test_loosening_move_is_rejected(self):
@@ -604,7 +590,7 @@ class TestApplyStopMoves:
 
         async with get_db() as db:
             cursor = await db.execute(
-                "SELECT stop_base, stop_trigger FROM sim_trades WHERE id = ?",
+                "SELECT stop_base FROM sim_trades WHERE id = ?",
                 (trade_id,),
             )
             row = await cursor.fetchone()
@@ -615,7 +601,6 @@ class TestApplyStopMoves:
             count = (await cursor.fetchone())[0]
 
         assert row[0] == pytest.approx(95.0)
-        assert row[1] == pytest.approx(93.1)
         assert count == 0
         mock_notify.assert_not_called()
 

@@ -82,7 +82,7 @@ async def _fill_pending_entries() -> None:
         cursor = await db.execute(
             """SELECT st.id, st.symbol, st.interval, st.side, st.signal_id,
                       st.invested_amount, st.portfolio, st.leverage,
-                      st.stop_base, st.stop_trigger, st.config_id,
+                      st.stop_base, st.config_id,
                       s.trigger_candle_time, sc.cost_bps, sc.strategy, sc.params
                FROM sim_trades st
                JOIN signals s ON st.signal_id = s.id
@@ -214,7 +214,6 @@ async def _fill_pending_entries() -> None:
                 "strategy": trade["strategy"],
                 "entry_price": entry_price,
                 "stop_price": float(trade["stop_base"]),
-                "stop_trigger": float(trade["stop_trigger"]),
                 "invested_amount": invested,
                 "leverage": float(trade["leverage"]) if trade.get("leverage") is not None else 1.0,
                 "sim_trade_id": trade["id"],
@@ -232,7 +231,7 @@ async def _check_intrabar_stops() -> None:
     async with get_db() as db:
         cursor = await db.execute(
             """SELECT id, symbol, interval, side, entry_price, stop_base,
-                      stop_trigger, quantity, portfolio, invested_amount,
+                      quantity, portfolio, invested_amount,
                       leverage, fees, config_id, signal_id
                FROM sim_trades WHERE status = 'open'"""
         )
@@ -260,20 +259,18 @@ async def _check_intrabar_stops() -> None:
         if price is None:
             continue
 
-        triggered = False
-        if (
-            trade["side"] == "long"
-            and price <= trade["stop_trigger"]
-            or trade["side"] == "short"
-            and price >= trade["stop_trigger"]
-        ):
-            triggered = True
-
+        stop_base = float(trade["stop_base"])
+        triggered = (trade["side"] == "long" and price <= stop_base) or (
+            trade["side"] == "short" and price >= stop_base
+        )
         if not triggered:
             continue
 
-        # Stop hit — close the SimTrade
-        exec_price = trade["stop_trigger"]
+        # Stop hit — close the SimTrade at stop_base (gap handling: if open is
+        # already past the stop, we use the actual current price instead).
+        exec_price = stop_base
+        if (trade["side"] == "long" and price < stop_base) or (trade["side"] == "short" and price > stop_base):
+            exec_price = price
         entry_price = float(trade["entry_price"])
         quantity = float(trade["quantity"])
         cost_factor = 0.0  # exit fee
@@ -356,14 +353,12 @@ async def _apply_stop_moves(
 ) -> None:
     """Apply every ``move_stop`` signal against the open trade.
 
-    For each accepted move: tighten stop_base/stop_trigger on sim_trades, append a
-    row to sim_trade_stop_moves, mirror it onto ``state`` so later exit checks in
-    the same candle see the updated value, and emit a notify_event.
+    For each accepted move: tighten stop_base on sim_trades, append a row to
+    sim_trade_stop_moves, mirror it onto ``state`` so later exit checks in the
+    same candle see the updated value, and emit a notify_event.
 
-    Rejects any move that would loosen the stop (long: new <= current base;
-    short: new >= current base). Honours stop_cross_pct buffer — same formula as
-    at entry fill, so the intrabar poller and candle-close strategy view stay
-    aligned.
+    Rejects any move that would loosen the stop (long: new <= current; short:
+    new >= current).
     """
     # Collect only tightening move_stop signals with a positive level.
     moves = [s for s in signals if getattr(s, "action", None) == "move_stop" and s.stop_price > 0]
@@ -371,13 +366,9 @@ async def _apply_stop_moves(
         return
 
     side = trade["side"]
-    stop_cross_pct = float(trade.get("stop_cross_pct") or 0.0)
-    buffer_sign = -1.0 if side == "long" else 1.0
-
     now = _now_iso()
     for sig in moves:
         prev_base = float(trade["stop_base"])
-        prev_trigger = float(trade["stop_trigger"])
         new_base = float(sig.stop_price)
 
         tightens = (side == "long" and new_base > prev_base) or (side == "short" and new_base < prev_base)
@@ -391,26 +382,22 @@ async def _apply_stop_moves(
             )
             continue
 
-        new_trigger = new_base * (1.0 + buffer_sign * stop_cross_pct)
-
         async with get_db() as db:
             await db.execute(
                 """UPDATE sim_trades
-                   SET stop_base = ?, stop_trigger = ?, updated_at = ?
+                   SET stop_base = ?, updated_at = ?
                    WHERE id = ?""",
-                (new_base, new_trigger, now, trade["id"]),
+                (new_base, now, trade["id"]),
             )
             cursor = await db.execute(
                 """INSERT INTO sim_trade_stop_moves
                        (sim_trade_id, prev_stop_base, new_stop_base,
-                        prev_stop_trigger, new_stop_trigger, candle_time, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                        candle_time, created_at)
+                   VALUES (?, ?, ?, ?, ?)""",
                 (
                     trade["id"],
                     prev_base,
                     new_base,
-                    prev_trigger,
-                    new_trigger,
                     candle_open_time,
                     now,
                 ),
@@ -420,8 +407,7 @@ async def _apply_stop_moves(
 
         # Mirror onto in-memory trade + PositionState so subsequent signals align.
         trade["stop_base"] = new_base
-        trade["stop_trigger"] = new_trigger
-        state.stop_price = new_trigger
+        state.stop_price = new_base
 
         entry_price = float(trade["entry_price"]) if trade.get("entry_price") else 0.0
         locked_pct: float | None = None
@@ -446,12 +432,11 @@ async def _apply_stop_moves(
         )
 
         logger.info(
-            "SimTrade %d STOP MOVED: side=%s %.6f -> %.6f (trigger %.6f)",
+            "SimTrade %d STOP MOVED: side=%s %.6f -> %.6f",
             trade["id"],
             side,
             prev_base,
             new_base,
-            new_trigger,
         )
 
 
@@ -466,10 +451,10 @@ async def _check_candle_close_exits(interval: str | None = None) -> None:
     When ``interval`` is provided, only trades on that timeframe are evaluated.
     """
     base_query = """SELECT st.id, st.symbol, st.interval, st.side, st.entry_price,
-                      st.entry_time, st.stop_base, st.stop_trigger,
+                      st.entry_time, st.stop_base,
                       st.quantity, st.portfolio, st.invested_amount, st.fees,
                       st.config_id, st.signal_id,
-                      sc.params, sc.strategy, sc.cost_bps, sc.stop_cross_pct
+                      sc.params, sc.strategy, sc.cost_bps
                FROM sim_trades st
                JOIN signal_configs sc ON st.config_id = sc.id
                WHERE st.status = 'open'"""
@@ -538,14 +523,14 @@ async def _check_candle_close_exits(interval: str | None = None) -> None:
         candle = df.iloc[t_last]
 
         for trade in trades:
-            # Build position state matching the open trade.
-            # Use stop_trigger so the strategy's candle-close stop check aligns
-            # with the intrabar polling threshold (both apply the stop_cross_pct buffer).
+            # Build position state matching the open trade. Use stop_base so the
+            # strategy's candle-close stop check fires at the same price as the
+            # intrabar poller (both compare against stop_base since #49).
             state = PositionState(
                 side=trade["side"],
                 entry_price=float(trade["entry_price"]),
                 entry_time=int(trade["entry_time"]),
-                stop_price=float(trade["stop_trigger"]),
+                stop_price=float(trade["stop_base"]),
                 quantity=float(trade["quantity"]),
             )
 
@@ -621,8 +606,8 @@ async def _check_candle_close_exits(interval: str | None = None) -> None:
                 elif sig.action in ("stop_long", "stop_short"):
                     # Stop also detected on candle close via Low/High
                     # But intrabar check should have caught this; handle here
-                    # as fallback using the candle's stop_price
-                    exec_price = float(trade["stop_trigger"])
+                    # as fallback using the candle's stop_base
+                    exec_price = float(trade["stop_base"])
                     open_price = float(candle["open"])
 
                     # Gap open past stop: execute at open
