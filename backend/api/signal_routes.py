@@ -33,6 +33,7 @@ class SignalConfigCreate(BaseModel):
     invested_amount: float | None = None
     leverage: float | None = None
     cost_bps: float = 10.0
+    maintenance_margin_pct: float = 0.005
     polling_interval_s: int | None = None
     telegram_enabled: bool = False
 
@@ -43,6 +44,7 @@ class SignalConfigPatch(BaseModel):
     invested_amount: float | None = None
     leverage: float | None = None
     cost_bps: float | None = None
+    maintenance_margin_pct: float | None = None
     polling_interval_s: int | None = None
     telegram_enabled: bool | None = None
 
@@ -100,9 +102,10 @@ async def create_signal_config(
                     (user_id, symbol, interval, strategy, params,
                      initial_portfolio, current_portfolio,
                      invested_amount, leverage, cost_bps,
+                     maintenance_margin_pct,
                      polling_interval_s, active, telegram_enabled, last_processed_candle,
                      created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0, ?, ?)""",
                 (
                     user.id,
                     req.symbol.upper(),
@@ -114,6 +117,7 @@ async def create_signal_config(
                     req.invested_amount,
                     req.leverage,
                     req.cost_bps,
+                    req.maintenance_margin_pct,
                     req.polling_interval_s,
                     1 if req.telegram_enabled else 0,
                     now,
@@ -185,6 +189,9 @@ async def patch_signal_config(
     if req.cost_bps is not None:
         fields.append("cost_bps = ?")
         values.append(req.cost_bps)
+    if req.maintenance_margin_pct is not None:
+        fields.append("maintenance_margin_pct = ?")
+        values.append(req.maintenance_margin_pct)
     if req.polling_interval_s is not None:
         fields.append("polling_interval_s = ?")
         values.append(req.polling_interval_s)
@@ -210,6 +217,43 @@ async def patch_signal_config(
             raise HTTPException(404, f"Config {config_id} not found")
 
     return {"id": config_id, "status": "updated"}
+
+
+@router.post("/signals/configs/{config_id}/reset-equity")
+async def reset_signal_config_equity(
+    config_id: int,
+    user: AuthUser = Depends(get_current_user),
+) -> dict:
+    """Reset a blown config back to the initial equity (#50).
+
+    Restores ``current_portfolio = initial_portfolio``, clears ``blown_at``,
+    flips ``status`` back to ``'active'``. Sim_trade history is *not* touched
+    — old closed trades stay in DB so the user can audit what happened. The
+    next signal sizes against the fresh equity.
+    """
+    now = _now_iso()
+    async with get_db() as db:
+        cursor = await db.execute(
+            "SELECT initial_portfolio, status FROM signal_configs WHERE id = ? AND user_id = ?",
+            (config_id, user.id),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            raise HTTPException(404, f"Config {config_id} not found")
+
+        initial = float(row[0])
+        await db.execute(
+            "UPDATE signal_configs SET current_portfolio = ?, status = 'active', "
+            "blown_at = NULL, updated_at = ? WHERE id = ?",
+            (initial, now, config_id),
+        )
+        await db.commit()
+
+    return {
+        "id": config_id,
+        "status": "active",
+        "current_portfolio": initial,
+    }
 
 
 @router.delete("/signals/configs/{config_id}")
@@ -504,6 +548,11 @@ async def close_sim_trade(
             (net_pnl, now, trade["config_id"]),
         )
         await db.commit()
+
+    # Trigger blown-state transition if equity dropped to ≤0 (#50).
+    from backend.live_tracker import _maybe_mark_blown  # noqa: PLC0415
+
+    await _maybe_mark_blown(trade["config_id"], now)
 
     return {
         "id": trade_id,

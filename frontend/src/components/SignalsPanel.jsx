@@ -161,6 +161,7 @@ function ConfigForm({ strategies, onCreated }) {
   const [selectedStrat, setSelectedStrat] = useState('')
   const [paramValues, setParamValues] = useState({})
   const [costBps, setCostBps] = useState(10)
+  const [maintenanceMarginPct, setMaintenanceMarginPct] = useState(0.005)
   const [portfolio, setPortfolio] = useState(10000)
   const [leverage, setLeverage] = useState(1)
   const [investedAmount, setInvestedAmount] = useState(10000)
@@ -199,6 +200,7 @@ function ConfigForm({ strategies, onCreated }) {
         symbol, interval, strategy: selectedStrat,
         params: paramValues,
         cost_bps: costBps,
+        maintenance_margin_pct: maintenanceMarginPct,
         initial_portfolio: portfolio,
         ...(capitalMode === 'leverage'
           ? { leverage, invested_amount: null }
@@ -298,10 +300,17 @@ function ConfigForm({ strategies, onCreated }) {
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-4)' }}>
         <div>
           <div className="section-title">Risk Parameters</div>
-          <div className="form-group">
-            <label className="form-label">Cost (bps)</label>
-            <input type="number" className="form-control" value={costBps} min={0} step={1}
-              onChange={e => setCostBps(parseFloat(e.target.value) || 0)} disabled={loading} />
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-3)' }}>
+            <div className="form-group">
+              <label className="form-label">Cost (bps)</label>
+              <input type="number" className="form-control" value={costBps} min={0} step={1}
+                onChange={e => setCostBps(parseFloat(e.target.value) || 0)} disabled={loading} />
+            </div>
+            <div className="form-group">
+              <label className="form-label" title="Maintenance margin used for the liquidation-price formula. Binance baseline ≈ 0.005 (0.5%) for low notional.">Maint. margin %</label>
+              <input type="number" className="form-control" value={maintenanceMarginPct} min={0} step={0.001}
+                onChange={e => setMaintenanceMarginPct(parseFloat(e.target.value) || 0)} disabled={loading} />
+            </div>
           </div>
         </div>
         <div>
@@ -334,7 +343,7 @@ function ConfigForm({ strategies, onCreated }) {
 }
 
 /* ---- Configs list ---- */
-function ConfigsList({ configs, onToggle, onToggleTelegram, onDelete }) {
+function ConfigsList({ configs, onToggle, onToggleTelegram, onDelete, onResetEquity }) {
   if (!configs || configs.length === 0) {
     return <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem', padding: 'var(--space-3)' }}>No signal configs yet.</div>
   }
@@ -362,9 +371,19 @@ function ConfigsList({ configs, onToggle, onToggleTelegram, onDelete }) {
             const current = Number(c.current_portfolio ?? initial)
             const deltaPct = initial > 0 ? ((current - initial) / initial) * 100 : 0
             const deltaColor = deltaPct > 0 ? 'var(--color-success)' : deltaPct < 0 ? 'var(--color-danger)' : 'var(--text-muted)'
+            const blown = c.status === 'blown'
             return (
-              <tr key={c.id}>
-                <td className="ta-right num-col" style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}>{c.id}</td>
+              <tr key={c.id} style={blown ? { opacity: 0.7 } : undefined}>
+                <td className="ta-right num-col" style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}>
+                  {c.id}
+                  {blown && (
+                    <span title={`Blown at ${c.blown_at ?? ''}`} style={{
+                      marginLeft: 6, padding: '1px 6px', borderRadius: 'var(--radius-sm)',
+                      background: 'rgba(239,68,68,0.2)', color: 'var(--color-danger)',
+                      fontSize: '0.7rem', fontWeight: 700, letterSpacing: '0.03em',
+                    }}>BLOWN</span>
+                  )}
+                </td>
                 <td>{c.symbol}</td>
                 <td>{c.interval}</td>
                 <td>{c.strategy}</td>
@@ -374,12 +393,19 @@ function ConfigsList({ configs, onToggle, onToggleTelegram, onDelete }) {
                   {deltaPct === 0 ? '—' : (deltaPct > 0 ? '+' : '') + deltaPct.toFixed(2) + '%'}
                 </td>
                 <td className="ta-center">
-                  <ToggleSwitch checked={c.active} onChange={(val) => onToggle(c.id, val)} />
+                  <ToggleSwitch checked={c.active} onChange={(val) => onToggle(c.id, val)} disabled={blown} />
                 </td>
                 <td className="ta-center">
                   <ToggleSwitch checked={!!c.telegram_enabled} onChange={(val) => onToggleTelegram(c.id, val)} />
                 </td>
-                <td className="ta-center">
+                <td className="ta-center" style={{ display: 'flex', gap: 4, justifyContent: 'center' }}>
+                  {blown && (
+                    <button className="btn btn-sm btn-secondary"
+                      title="Restore current_portfolio = initial_portfolio and reactivate the config"
+                      onClick={() => { if (confirm('Reset equity to initial and reactivate this config?')) onResetEquity(c.id) }}>
+                      Reset equity
+                    </button>
+                  )}
                   <button className="btn btn-sm btn-secondary" style={{ color: 'var(--color-danger)' }}
                     onClick={() => { if (confirm('Delete this config? Open trades will be closed.')) onDelete(c.id) }}>
                     Delete
@@ -512,6 +538,7 @@ function SimTradesList({ trades, onClose }) {
             <th className="ta-right" title="Capital usado al abrir este trade (snapshot del current_portfolio en ese momento)">Cap@entry</th>
             <th className="ta-right">Entry</th>
             <th className="ta-right">Stop</th>
+            <th className="ta-right" title="Precio de liquidación. NULL en trades sin apalancamiento. Se cierra automáticamente aquí en vez de en el stop si el precio cruza primero.">Liq</th>
             <th className="ta-right">Exit</th>
             <th>Reason</th>
             <th className="ta-right">PnL</th>
@@ -550,6 +577,9 @@ function SimTradesList({ trades, onClose }) {
                   <td className="ta-right num-col" style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>{t.portfolio != null ? fmtMoney(t.portfolio) : '—'}</td>
                   <td className="ta-right num-col">{t.entry_price ? fmtNum(t.entry_price, 4) : '—'}</td>
                   <td className="ta-right num-col">{fmtNum(t.stop_base, 4)}</td>
+                  <td className="ta-right num-col" style={{ color: t.liquidation_price != null ? 'var(--color-warning)' : 'var(--text-muted)', fontSize: '0.85rem' }}>
+                    {t.liquidation_price != null ? fmtNum(t.liquidation_price, 4) : '—'}
+                  </td>
                   <td className="ta-right num-col">{t.exit_price ? fmtNum(t.exit_price, 4) : '—'}</td>
                   <td>{t.exit_reason || '—'}</td>
                   <td className="ta-right num-col" style={{ color: pnlColor, fontWeight: 600 }}>{t.pnl != null ? fmtMoney(t.pnl) : '—'}</td>
@@ -563,7 +593,7 @@ function SimTradesList({ trades, onClose }) {
                 </tr>
                 {isExpanded && (
                   <tr>
-                    <td colSpan={14} style={{ background: 'var(--surface-1)', padding: 'var(--space-3)' }}>
+                    <td colSpan={15} style={{ background: 'var(--surface-1)', padding: 'var(--space-3)' }}>
                       <SimTradeReview trade={t} moves={moves} loadingMoves={loadingMoves && moves === undefined} />
                     </td>
                   </tr>
@@ -1163,6 +1193,11 @@ export default function SignalsPanel() {
     refreshAll()
   }
 
+  const handleResetEquity = async (id) => {
+    await apiFetch(`/api/signals/configs/${id}/reset-equity`, { method: 'POST' })
+    refreshAll()
+  }
+
   const handleCloseSimTrade = async (id) => {
     await apiFetch(`/api/sim-trades/${id}/close`, { method: 'POST' })
     refreshAll()
@@ -1215,7 +1250,7 @@ export default function SignalsPanel() {
           </div>
           <div className="card-body">
             <div className="section-title">Active Configurations</div>
-            <ConfigsList configs={configs} onToggle={handleToggle} onToggleTelegram={handleToggleTelegram} onDelete={handleDelete} onRefresh={fetchConfigs} />
+            <ConfigsList configs={configs} onToggle={handleToggle} onToggleTelegram={handleToggleTelegram} onDelete={handleDelete} onResetEquity={handleResetEquity} onRefresh={fetchConfigs} />
             <hr className="divider" />
             <div className="section-title">New Configuration</div>
             <ConfigForm strategies={strategies} onCreated={refreshAll} />

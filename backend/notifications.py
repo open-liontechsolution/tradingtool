@@ -31,7 +31,7 @@ from backend.telegram_client import escape_md, send_message
 logger = logging.getLogger(__name__)
 
 # All event types the dispatcher knows how to format.
-_SUPPORTED_EVENTS = {"entry", "exit_signal", "stop_hit", "stop_moved"}
+_SUPPORTED_EVENTS = {"entry", "exit_signal", "stop_hit", "stop_moved", "liquidated", "account_blown"}
 
 
 def _now_iso() -> str:
@@ -132,7 +132,8 @@ def _trade_link(sim_trade_id: int | None) -> str | None:
 
 
 def _format_entry(payload: dict[str, Any]) -> str:
-    leverage_str = escape_md(f"{payload.get('leverage', 1.0):.2f}")
+    leverage = payload.get("leverage", 1.0)
+    leverage_str = escape_md(f"{leverage:.2f}")
     lines = [
         f"📈 *Entrada {escape_md(payload['side'].upper())}* · `{escape_md(payload['symbol'])}` · {escape_md(payload['interval'])}",
         f"Estrategia: `{escape_md(payload['strategy'])}`",
@@ -140,10 +141,35 @@ def _format_entry(payload: dict[str, Any]) -> str:
         f"Stop: `{_fmt_price(payload.get('stop_price'))}`",
         f"Invertido: `{_fmt_price(payload.get('invested_amount'))}` USDT  \\(x{leverage_str}\\)",
     ]
+    # Show liquidation context only when leverage is meaningful (#50).
+    liq = payload.get("liquidation_price")
+    entry_price = payload.get("entry_price")
+    if liq is not None and entry_price:
+        dist_pct = abs(float(liq) - float(entry_price)) / float(entry_price)
+        lines.append(f"Liq: `{_fmt_price(liq)}`  \\(dist: {_fmt_pct(dist_pct)}\\)")
     link = _trade_link(payload.get("sim_trade_id"))
     if link:
         lines.append(f"🔗 {link}")
     return "\n".join(lines)
+
+
+def _format_liquidated(payload: dict[str, Any]) -> str:
+    lines = [
+        f"💥 *LIQUIDACIÓN* · `{escape_md(payload['symbol'])}` {escape_md(payload['side'])} · {escape_md(payload['interval'])}",
+        f"Precio liq: `{_fmt_price(payload.get('exit_price'))}`",
+        f"PnL: `{_fmt_pct(payload.get('pnl_pct'))}`  \\({_fmt_money(payload.get('pnl'))}\\)",
+    ]
+    link = _trade_link(payload.get("sim_trade_id"))
+    if link:
+        lines.append(f"🔗 {link}")
+    return "\n".join(lines)
+
+
+def _format_account_blown(payload: dict[str, Any]) -> str:
+    return (
+        f"🔥 *Cuenta quemada* · config `#{escape_md(str(payload.get('config_id', '?')))}`\n"
+        "Las nuevas señales quedan pausadas hasta hacer reset manual del equity\\."
+    )
 
 
 def _format_exit(payload: dict[str, Any]) -> str:
@@ -197,6 +223,8 @@ _FORMATTERS = {
     "exit_signal": _format_exit,
     "stop_hit": _format_stop,
     "stop_moved": _format_stop_moved,
+    "liquidated": _format_liquidated,
+    "account_blown": _format_account_blown,
 }
 
 

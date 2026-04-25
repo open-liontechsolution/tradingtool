@@ -51,17 +51,88 @@ def _current_candle_open(interval: str) -> int:
     return (now_ms // step_ms) * step_ms
 
 
+def _compute_liquidation_price(
+    *, side: str, entry_price: float, leverage: float, maintenance_margin_pct: float
+) -> float | None:
+    """Approximate isolated-margin liquidation price.
+
+    Formula (isolated margin, single position):
+      long:  liq = entry × (1 − 1/leverage + mm)
+      short: liq = entry × (1 + 1/leverage − mm)
+
+    Returns ``None`` when leverage ≤ 1 (no liquidation risk under isolated
+    margin: the worst case is a 100% drawdown, which is already capped by
+    ``current_portfolio`` going to zero — handled by the blown-state path).
+    """
+    if leverage is None or leverage <= 1.0 or entry_price <= 0:
+        return None
+    factor = 1.0 / leverage - maintenance_margin_pct
+    if factor <= 0:
+        # mm so high it would liquidate immediately — config is malformed.
+        return None
+    if side == "long":
+        return entry_price * (1.0 - factor)
+    if side == "short":
+        return entry_price * (1.0 + factor)
+    return None
+
+
 async def _apply_pnl_to_equity(db, config_id: int, net_pnl: float, now: str) -> None:
     """Add ``net_pnl`` to ``signal_configs.current_portfolio`` for ``config_id``.
 
     Caller is expected to be inside an open ``async with get_db() as db`` block
-    so this runs in the same transaction as the sim_trade close. The update is
-    bare arithmetic — clamping to non-negative and ``blown`` state are deferred
-    to #50.
+    so this runs in the same transaction as the sim_trade close.
+
+    Negative results are tolerated at write-time (the SQL is bare arithmetic).
+    A separate clamp + blown-state transition happens via ``_maybe_mark_blown``
+    so it can also run for manual closes from ``signal_routes`` without
+    duplicating the logic.
     """
     await db.execute(
         "UPDATE signal_configs SET current_portfolio = current_portfolio + ?, updated_at = ? WHERE id = ?",
         (net_pnl, now, config_id),
+    )
+
+
+async def _maybe_mark_blown(config_id: int, now: str) -> None:
+    """Clamp ``current_portfolio`` at 0 and flip ``status`` to ``'blown'`` if needed.
+
+    Reads the freshly-updated equity in a separate transaction so this runs
+    AFTER the sim_trade close commit. Emits ``account_blown`` once on
+    transition (idempotent: re-running is a no-op since status is already
+    ``blown``).
+    """
+    async with get_db() as db:
+        cursor = await db.execute(
+            "SELECT current_portfolio, status, blown_at FROM signal_configs WHERE id = ?",
+            (config_id,),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return
+        current = float(row[0] or 0.0)
+        status = row[1]
+        already_blown = status == "blown" or row[2] is not None
+
+        if already_blown:
+            return
+        if current > 0:
+            return
+
+        await db.execute(
+            "UPDATE signal_configs SET current_portfolio = 0, status = 'blown', "
+            "blown_at = ?, updated_at = ? WHERE id = ?",
+            (now, now, config_id),
+        )
+        await db.commit()
+
+    logger.warning("Config %d marked as BLOWN (current_portfolio reached 0)", config_id)
+    await notify_event(
+        event_type="account_blown",
+        config_id=config_id,
+        reference_type="signal_config",
+        reference_id=config_id,
+        payload={"config_id": config_id, "blown_at": now},
     )
 
 
@@ -97,7 +168,8 @@ async def _fill_pending_entries() -> None:
             """SELECT st.id, st.symbol, st.interval, st.side, st.signal_id,
                       st.invested_amount, st.portfolio, st.leverage,
                       st.stop_base, st.config_id,
-                      s.trigger_candle_time, sc.cost_bps, sc.strategy, sc.params
+                      s.trigger_candle_time,
+                      sc.cost_bps, sc.strategy, sc.params, sc.maintenance_margin_pct
                FROM sim_trades st
                JOIN signals s ON st.signal_id = s.id
                JOIN signal_configs sc ON st.config_id = sc.id
@@ -191,15 +263,33 @@ async def _fill_pending_entries() -> None:
         cost_factor = cost_bps / 10_000.0
         fee = invested * cost_factor
         quantity = invested / entry_price
+        leverage = float(trade.get("leverage") or 1.0)
+        mm_pct = float(trade.get("maintenance_margin_pct") or 0.005)
+        liquidation_price = _compute_liquidation_price(
+            side=trade["side"],
+            entry_price=entry_price,
+            leverage=leverage,
+            maintenance_margin_pct=mm_pct,
+        )
         now = _now_iso()
 
         async with get_db() as db:
             await db.execute(
                 """UPDATE sim_trades
                    SET entry_price = ?, entry_time = ?, quantity = ?, fees = ?,
-                       equity_peak = ?, status = 'open', updated_at = ?
+                       equity_peak = ?, liquidation_price = ?,
+                       status = 'open', updated_at = ?
                    WHERE id = ?""",
-                (entry_price, entry_time, quantity, fee, float(trade["portfolio"]), now, trade["id"]),
+                (
+                    entry_price,
+                    entry_time,
+                    quantity,
+                    fee,
+                    float(trade["portfolio"]),
+                    liquidation_price,
+                    now,
+                    trade["id"],
+                ),
             )
             await db.execute(
                 "UPDATE signals SET status = 'active' WHERE id = ?",
@@ -229,7 +319,8 @@ async def _fill_pending_entries() -> None:
                 "entry_price": entry_price,
                 "stop_price": float(trade["stop_base"]),
                 "invested_amount": invested,
-                "leverage": float(trade["leverage"]) if trade.get("leverage") is not None else 1.0,
+                "leverage": leverage,
+                "liquidation_price": liquidation_price,
                 "sim_trade_id": trade["id"],
             },
         )
@@ -245,6 +336,7 @@ async def _check_intrabar_stops() -> None:
     async with get_db() as db:
         cursor = await db.execute(
             """SELECT id, symbol, interval, side, entry_price, stop_base,
+                      liquidation_price,
                       quantity, portfolio, invested_amount,
                       leverage, fees, config_id, signal_id
                FROM sim_trades WHERE status = 'open'"""
@@ -273,22 +365,36 @@ async def _check_intrabar_stops() -> None:
         if price is None:
             continue
 
+        side = trade["side"]
         stop_base = float(trade["stop_base"])
-        triggered = (trade["side"] == "long" and price <= stop_base) or (
-            trade["side"] == "short" and price >= stop_base
+        liq_price = trade.get("liquidation_price")
+        liq_price = float(liq_price) if liq_price is not None else None
+
+        # Liquidation has priority over stop: a leveraged exchange would close
+        # the position at liq_price *before* a stop-market further away ever
+        # fires. With no leverage (liq_price is None), only the stop applies.
+        liq_triggered = liq_price is not None and (
+            (side == "long" and price <= liq_price) or (side == "short" and price >= liq_price)
         )
-        if not triggered:
+        stop_triggered = (side == "long" and price <= stop_base) or (side == "short" and price >= stop_base)
+
+        if not (liq_triggered or stop_triggered):
             continue
 
-        # Stop hit — close the SimTrade at stop_base (gap handling: if open is
-        # already past the stop, we use the actual current price instead).
-        exec_price = stop_base
-        if (trade["side"] == "long" and price < stop_base) or (trade["side"] == "short" and price > stop_base):
-            exec_price = price
+        if liq_triggered:
+            exec_price = liq_price
+            exit_reason = "liquidated"
+        else:
+            # Stop hit — close at stop_base (gap handling: if price is already
+            # past the stop, we use the actual current price instead).
+            exec_price = stop_base
+            if (side == "long" and price < stop_base) or (side == "short" and price > stop_base):
+                exec_price = price
+            exit_reason = "stop_intrabar"
+
         entry_price = float(trade["entry_price"])
         quantity = float(trade["quantity"])
         cost_factor = 0.0  # exit fee
-        # Load cost_bps from config
         async with get_db() as db:
             cursor = await db.execute(
                 "SELECT cost_bps FROM signal_configs WHERE id = ?",
@@ -298,10 +404,7 @@ async def _check_intrabar_stops() -> None:
         if cfg_row:
             cost_factor = float(cfg_row[0]) / 10_000.0
 
-        if trade["side"] == "long":
-            gross_pnl = quantity * (exec_price - entry_price)
-        else:
-            gross_pnl = quantity * (entry_price - exec_price)
+        gross_pnl = quantity * (exec_price - entry_price) if side == "long" else quantity * (entry_price - exec_price)
         exit_fee = abs(quantity * exec_price) * cost_factor
         net_pnl = gross_pnl - exit_fee
         total_fees = float(trade["fees"]) + exit_fee
@@ -311,11 +414,11 @@ async def _check_intrabar_stops() -> None:
         async with get_db() as db:
             await db.execute(
                 """UPDATE sim_trades
-                   SET exit_price = ?, exit_time = ?, exit_reason = 'stop_intrabar',
+                   SET exit_price = ?, exit_time = ?, exit_reason = ?,
                        status = 'closed', pnl = ?, pnl_pct = ?, fees = ?,
                        updated_at = ?
                    WHERE id = ?""",
-                (exec_price, now_ms, net_pnl, pnl_pct, total_fees, now, trade["id"]),
+                (exec_price, now_ms, exit_reason, net_pnl, pnl_pct, total_fees, now, trade["id"]),
             )
             await db.execute(
                 "UPDATE signals SET status = 'closed' WHERE id = ?",
@@ -324,35 +427,53 @@ async def _check_intrabar_stops() -> None:
             await _apply_pnl_to_equity(db, trade["config_id"], net_pnl, now)
             await db.commit()
 
+        # Drives the blown-state transition + account_blown notification when
+        # current_portfolio drops to 0 (clamp + status='blown').
+        await _maybe_mark_blown(trade["config_id"], now)
+
         logger.info(
-            "SimTrade %d STOPPED: %s %s exec=%.6f pnl=%.4f",
+            "SimTrade %d %s: %s %s exec=%.6f pnl=%.4f",
             trade["id"],
-            trade["side"],
+            "LIQUIDATED" if liq_triggered else "STOPPED",
+            side,
             trade["symbol"],
             exec_price,
             net_pnl,
         )
 
-        await notify_event(
-            event_type="stop_hit",
-            config_id=trade["config_id"],
-            reference_type="sim_trade",
-            reference_id=trade["id"],
-            payload={
-                "symbol": trade["symbol"],
-                "interval": trade["interval"],
-                "side": trade["side"],
-                "exit_price": exec_price,
-                "pnl": net_pnl,
-                "pnl_pct": pnl_pct,
-                "exit_reason": "stop_intrabar",
-                "sim_trade_id": trade["id"],
-            },
-        )
-
-        # Check liquidation
-        if portfolio + net_pnl <= 0:
-            logger.warning("SimTrade %d: liquidation event (equity <= 0)", trade["id"])
+        if liq_triggered:
+            await notify_event(
+                event_type="liquidated",
+                config_id=trade["config_id"],
+                reference_type="sim_trade",
+                reference_id=trade["id"],
+                payload={
+                    "symbol": trade["symbol"],
+                    "interval": trade["interval"],
+                    "side": side,
+                    "exit_price": exec_price,
+                    "pnl": net_pnl,
+                    "pnl_pct": pnl_pct,
+                    "sim_trade_id": trade["id"],
+                },
+            )
+        else:
+            await notify_event(
+                event_type="stop_hit",
+                config_id=trade["config_id"],
+                reference_type="sim_trade",
+                reference_id=trade["id"],
+                payload={
+                    "symbol": trade["symbol"],
+                    "interval": trade["interval"],
+                    "side": side,
+                    "exit_price": exec_price,
+                    "pnl": net_pnl,
+                    "pnl_pct": pnl_pct,
+                    "exit_reason": "stop_intrabar",
+                    "sim_trade_id": trade["id"],
+                },
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -588,6 +709,8 @@ async def _check_candle_close_exits(interval: str | None = None) -> None:
                         await _apply_pnl_to_equity(db, trade["config_id"], net_pnl, now)
                         await db.commit()
 
+                    await _maybe_mark_blown(trade["config_id"], now)
+
                     duration = max(
                         (int(candle["open_time"]) - int(trade["entry_time"])) // step_ms,
                         0,
@@ -665,6 +788,8 @@ async def _check_candle_close_exits(interval: str | None = None) -> None:
                         )
                         await _apply_pnl_to_equity(db, trade["config_id"], net_pnl, now)
                         await db.commit()
+
+                    await _maybe_mark_blown(trade["config_id"], now)
 
                     await notify_event(
                         event_type="stop_hit",
