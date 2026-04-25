@@ -9,14 +9,13 @@ same reasons.
 The harness drives the live engine candle-by-candle with a mocked clock, so its
 behaviour is deterministic. Intrabar polling (``_check_intrabar_stops``) is
 intentionally skipped here:
-  * The intrabar path executes at the live ``stop_trigger`` regardless of the actual
-    ticker price, so on a gap candle (open already past stop) it diverges from
-    backtest, which fills at the open price. Issue #49 removes the trigger buffer
-    and unifies that codepath; once it lands, the harness will be extended to
-    cover intrabar in Phase 5.
-  * The candle-close path (`_check_candle_close_exits`) does mirror backtest's gap
-    handling (line 626-635 of live_tracker.py) and produces identical exit prices
-    for the cases this harness exercises.
+  * Intrabar exits trigger at ``stop_base`` (post-#49) but the harness drives
+    candle-close logic only — same engine semantics, same prices, but no need
+    to inject worst-case ticker prices per candle. Slot expansion in Phase 5
+    will optionally drive intrabar too.
+  * The candle-close path (`_check_candle_close_exits`) mirrors backtest's gap
+    handling and produces identical exit prices for the cases this harness
+    exercises.
 
 Trade-log comparison is structural (times, prices, side, normalized exit reason).
 PnL/quantity comparison is deferred to Phase 5: backtest compounds the equity
@@ -117,23 +116,21 @@ async def _insert_config(
     params: dict,
     portfolio: float,
     cost_bps: float,
-    stop_cross_pct: float = 0.0,
 ) -> dict:
     now = _now_iso()
     async with get_db() as db:
         cursor = await db.execute(
             """INSERT INTO signal_configs
-                (symbol, interval, strategy, params, stop_cross_pct,
+                (symbol, interval, strategy, params,
                  portfolio, invested_amount, leverage, cost_bps,
                  polling_interval_s, active, last_processed_candle,
                  created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, NULL, 1.0, ?, NULL, 1, 0, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, NULL, 1.0, ?, NULL, 1, 0, ?, ?)""",
             (
                 symbol,
                 interval,
                 strategy,
                 json.dumps(params, sort_keys=True),
-                stop_cross_pct,
                 portfolio,
                 cost_bps,
                 now,
@@ -293,13 +290,13 @@ def assert_trade_logs_equal(bt_log: list[dict], live_log: list[dict], price_tol:
 
 @pytest.mark.asyncio
 async def test_slot_a_breakout_close_current_default():
-    """Slot A × breakout × close_current × stop_cross_pct=0 produces matching trade logs.
+    """Slot A × breakout × close_current produces matching trade logs.
 
     ``close_current`` is the execution mode where the engines line up cleanly:
     both fill entry and exit at the close of the trigger candle, so exit_price
     parity is exact. ``open_next`` has a separate gap to track (backtest's exit
     fills at the *current* candle's open while live fills at close — see
-    backtest_engine.py:127), which is out of scope for Phase 1.
+    backtest_engine.py).
     """
     slot = _load_slot("slot_a")
     symbol = slot["symbol"]
@@ -330,7 +327,6 @@ async def test_slot_a_breakout_close_current_default():
         params=strategy_params,
         portfolio=portfolio,
         cost_bps=cost_bps,
-        stop_cross_pct=0.0,
     )
 
     # Backtest over the full slot range
@@ -349,6 +345,59 @@ async def test_slot_a_breakout_close_current_default():
     assert not bt_result.liquidated, "backtest liquidated unexpectedly"
 
     # Live replay over the same slot
+    live_log = await _run_live_replay(config, candles, interval, warmup=0)
+
+    assert_trade_logs_equal(bt_result.trade_log, live_log)
+
+
+@pytest.mark.asyncio
+async def test_slot_a_breakout_trailing_close_current():
+    """Slot A × breakout_trailing × close_current: trailing move_stop parity (#49)."""
+    slot = _load_slot("slot_a")
+    symbol = slot["symbol"]
+    interval = slot["interval"]
+    candles = slot["candles"]
+
+    await init_db()
+    await _bulk_insert_klines(symbol, interval, candles)
+
+    strategy_params = {
+        "N_entrada": 20,
+        "M_salida": 10,
+        "stop_pct": 0.05,
+        "trailing_lookback": 10,
+        "modo_ejecucion": "close_current",
+        "habilitar_long": True,
+        "habilitar_short": True,
+        "salida_por_ruptura": True,
+        "coste_total_bps": 0.0,
+    }
+    portfolio = 10_000.0
+    cost_bps = 0.0
+
+    config = await _insert_config(
+        symbol=symbol,
+        interval=interval,
+        strategy="breakout_trailing",
+        params=strategy_params,
+        portfolio=portfolio,
+        cost_bps=cost_bps,
+    )
+
+    start_ms = int(candles[0]["open_time"])
+    end_ms = int(candles[-1]["open_time"]) + INTERVAL_MS[interval]
+    bt_result = await run_backtest(
+        symbol=symbol,
+        interval=interval,
+        start_ms=start_ms,
+        end_ms=end_ms,
+        strategy_name="breakout_trailing",
+        params=strategy_params,
+        initial_capital=portfolio,
+    )
+    assert bt_result.error is None, f"backtest error: {bt_result.error}"
+    assert not bt_result.liquidated
+
     live_log = await _run_live_replay(config, candles, interval, warmup=0)
 
     assert_trade_logs_equal(bt_result.trade_log, live_log)

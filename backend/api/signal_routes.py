@@ -29,7 +29,6 @@ class SignalConfigCreate(BaseModel):
     interval: str
     strategy: str
     params: dict = {}
-    stop_cross_pct: float = 0.02
     portfolio: float = 10_000.0
     invested_amount: float | None = None
     leverage: float | None = None
@@ -40,7 +39,6 @@ class SignalConfigCreate(BaseModel):
 
 class SignalConfigPatch(BaseModel):
     active: bool | None = None
-    stop_cross_pct: float | None = None
     portfolio: float | None = None
     invested_amount: float | None = None
     leverage: float | None = None
@@ -99,18 +97,17 @@ async def create_signal_config(
         try:
             cursor = await db.execute(
                 """INSERT INTO signal_configs
-                    (user_id, symbol, interval, strategy, params, stop_cross_pct,
+                    (user_id, symbol, interval, strategy, params,
                      portfolio, invested_amount, leverage, cost_bps,
                      polling_interval_s, active, telegram_enabled, last_processed_candle,
                      created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0, ?, ?)""",
                 (
                     user.id,
                     req.symbol.upper(),
                     req.interval,
                     req.strategy,
                     params_json,
-                    req.stop_cross_pct,
                     req.portfolio,
                     req.invested_amount,
                     req.leverage,
@@ -172,9 +169,6 @@ async def patch_signal_config(
     if req.active is not None:
         fields.append("active = ?")
         values.append(1 if req.active else 0)
-    if req.stop_cross_pct is not None:
-        fields.append("stop_cross_pct = ?")
-        values.append(req.stop_cross_pct)
     if req.portfolio is not None:
         fields.append("portfolio = ?")
         values.append(req.portfolio)
@@ -427,7 +421,7 @@ async def list_sim_trade_stop_moves(
 
         cursor = await db.execute(
             """SELECT id, sim_trade_id, prev_stop_base, new_stop_base,
-                      prev_stop_trigger, new_stop_trigger, candle_time, created_at
+                      candle_time, created_at
                FROM sim_trade_stop_moves
                WHERE sim_trade_id = ?
                ORDER BY id ASC""",

@@ -286,7 +286,6 @@ async def init_db() -> None:
                 interval                TEXT    NOT NULL,
                 strategy                TEXT    NOT NULL,
                 params                  TEXT    NOT NULL DEFAULT '{}',
-                stop_cross_pct          REAL    NOT NULL DEFAULT 0.02,
                 portfolio               REAL    NOT NULL DEFAULT 10000.0,
                 invested_amount         REAL,
                 leverage                REAL,
@@ -309,7 +308,6 @@ async def init_db() -> None:
                 side                    TEXT    NOT NULL,
                 trigger_candle_time     INTEGER NOT NULL,
                 stop_price              REAL    NOT NULL,
-                stop_trigger_price      REAL    NOT NULL,
                 status                  TEXT    NOT NULL DEFAULT 'pending',
                 created_at              TEXT    NOT NULL
             );
@@ -328,7 +326,6 @@ async def init_db() -> None:
                 entry_price             REAL,
                 entry_time              INTEGER,
                 stop_base               REAL    NOT NULL,
-                stop_trigger            REAL    NOT NULL,
                 exit_price              REAL,
                 exit_time               INTEGER,
                 exit_reason             TEXT,
@@ -399,8 +396,6 @@ async def init_db() -> None:
                 sim_trade_id       INTEGER NOT NULL REFERENCES sim_trades(id) ON DELETE CASCADE,
                 prev_stop_base     REAL    NOT NULL,
                 new_stop_base      REAL    NOT NULL,
-                prev_stop_trigger  REAL    NOT NULL,
-                new_stop_trigger   REAL    NOT NULL,
                 candle_time        INTEGER NOT NULL,
                 created_at         TEXT    NOT NULL
             );
@@ -455,3 +450,26 @@ async def init_db() -> None:
             "ON notification_log (event_type, reference_type, reference_id, channel)"
         )
         await db.commit()
+
+        # --- drop legacy stop_cross_pct / stop_trigger columns (issue #49) ---
+        # Live now closes stops at stop_base; the trigger buffer is gone.
+        cursor = await db.execute("PRAGMA table_info(signal_configs)")
+        if "stop_cross_pct" in {row[1] for row in await cursor.fetchall()}:
+            await db.execute("ALTER TABLE signal_configs DROP COLUMN stop_cross_pct")
+            await db.commit()
+        cursor = await db.execute("PRAGMA table_info(signals)")
+        if "stop_trigger_price" in {row[1] for row in await cursor.fetchall()}:
+            await db.execute("ALTER TABLE signals DROP COLUMN stop_trigger_price")
+            await db.commit()
+        cursor = await db.execute("PRAGMA table_info(sim_trades)")
+        if "stop_trigger" in {row[1] for row in await cursor.fetchall()}:
+            await db.execute("ALTER TABLE sim_trades DROP COLUMN stop_trigger")
+            await db.commit()
+        cursor = await db.execute("PRAGMA table_info(sim_trade_stop_moves)")
+        stop_moves_cols = {row[1] for row in await cursor.fetchall()}
+        if "prev_stop_trigger" in stop_moves_cols:
+            await db.execute("ALTER TABLE sim_trade_stop_moves DROP COLUMN prev_stop_trigger")
+            await db.commit()
+        if "new_stop_trigger" in stop_moves_cols:
+            await db.execute("ALTER TABLE sim_trade_stop_moves DROP COLUMN new_stop_trigger")
+            await db.commit()

@@ -93,13 +93,9 @@ async def _create_signal_and_sim_trade(
     side: str,
     trigger_candle_time: int,
     stop_price: float,
-    stop_cross_pct: float,
 ) -> int | None:
     """Create a signal + sim_trade pair. Returns signal_id or None if dedup."""
     now = _now_iso()
-
-    # Compute stop_trigger from stop_base and stop_cross_pct
-    stop_trigger = stop_price * (1.0 - stop_cross_pct) if side == "long" else stop_price * (1.0 + stop_cross_pct)
 
     # Resolve portfolio/invested/leverage
     portfolio = float(config["portfolio"])
@@ -120,9 +116,9 @@ async def _create_signal_and_sim_trade(
             cursor = await db.execute(
                 """INSERT INTO signals
                     (config_id, symbol, interval, strategy, side,
-                     trigger_candle_time, stop_price, stop_trigger_price,
+                     trigger_candle_time, stop_price,
                      status, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)""",
                 (
                     config["id"],
                     config["symbol"],
@@ -131,7 +127,6 @@ async def _create_signal_and_sim_trade(
                     side,
                     trigger_candle_time,
                     stop_price,
-                    stop_trigger,
                     now,
                 ),
             )
@@ -144,10 +139,10 @@ async def _create_signal_and_sim_trade(
         await db.execute(
             """INSERT INTO sim_trades
                 (signal_id, config_id, symbol, interval, side,
-                 stop_base, stop_trigger, status,
+                 stop_base, status,
                  portfolio, invested_amount, leverage, fees,
                  created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, 'pending_entry',
+               VALUES (?, ?, ?, ?, ?, ?, 'pending_entry',
                        ?, ?, ?, ?, ?, ?)""",
             (
                 signal_id,
@@ -156,7 +151,6 @@ async def _create_signal_and_sim_trade(
                 config["interval"],
                 side,
                 stop_price,
-                stop_trigger,
                 portfolio,
                 invested_amount,
                 leverage,
@@ -168,12 +162,11 @@ async def _create_signal_and_sim_trade(
         await db.commit()
 
     logger.info(
-        "Signal created: config=%d side=%s candle=%d stop=%.6f trigger=%.6f",
+        "Signal created: config=%d side=%s candle=%d stop=%.6f",
         config["id"],
         side,
         trigger_candle_time,
         stop_price,
-        stop_trigger,
     )
     return signal_id
 
@@ -184,7 +177,6 @@ async def scan_config(config: dict) -> None:
     symbol = config["symbol"]
     strategy_name = config["strategy"]
     params: dict = json.loads(config["params"]) if isinstance(config["params"], str) else config["params"]
-    stop_cross_pct = float(config["stop_cross_pct"])
     last_processed = config["last_processed_candle"] or 0
 
     last_closed = _last_closed_candle_time(interval)
@@ -265,7 +257,6 @@ async def scan_config(config: dict) -> None:
                 side=side,
                 trigger_candle_time=last_closed,
                 stop_price=sig.stop_price,
-                stop_cross_pct=stop_cross_pct,
             )
             break  # one signal per scan cycle
 

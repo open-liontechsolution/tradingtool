@@ -53,10 +53,10 @@ async def _insert_config(user_id: int, *, telegram_enabled: bool = False) -> int
     async with get_db() as db:
         cursor = await db.execute(
             """INSERT INTO signal_configs
-                (user_id, symbol, interval, strategy, params, stop_cross_pct, portfolio,
+                (user_id, symbol, interval, strategy, params, portfolio,
                  invested_amount, leverage, cost_bps, polling_interval_s,
                  active, telegram_enabled, last_processed_candle, created_at, updated_at)
-               VALUES (?, 'BTCUSDT', '1h', 'breakout', '{}', 0.02, 10000,
+               VALUES (?, 'BTCUSDT', '1h', 'breakout', '{}', 10000,
                        NULL, 1.0, 10.0, NULL,
                        1, ?, 0, ?, ?)""",
             (user_id, 1 if telegram_enabled else 0, now, now),
@@ -97,7 +97,6 @@ async def test_internal_log_always_written_even_without_telegram():
                 "strategy": "breakout",
                 "entry_price": 65432.1,
                 "stop_price": 63200.0,
-                "stop_trigger": 62000.0,
                 "invested_amount": 1000.0,
                 "leverage": 1.0,
                 "sim_trade_id": 999,
@@ -201,7 +200,6 @@ async def test_dispatches_to_telegram_when_all_gates_pass():
                 "strategy": "breakout",
                 "entry_price": 65432.1,
                 "stop_price": 63200.0,
-                "stop_trigger": 62000.0,
                 "invested_amount": 1000.0,
                 "leverage": 1.0,
                 "sim_trade_id": 303,
@@ -232,7 +230,6 @@ async def test_dedup_prevents_double_telegram_send():
         "strategy": "breakout",
         "entry_price": 100.0,
         "stop_price": 98.0,
-        "stop_trigger": 97.0,
         "invested_amount": 1000.0,
         "leverage": 1.0,
         "sim_trade_id": 404,

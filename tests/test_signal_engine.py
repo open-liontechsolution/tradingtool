@@ -1,4 +1,4 @@
-"""Tests for signal_engine: scanner logic, dedup, stop_cross_pct calculation."""
+"""Tests for signal_engine: scanner logic, dedup, sim_trade creation."""
 
 from __future__ import annotations
 
@@ -66,7 +66,6 @@ async def _insert_config(
     interval="1h",
     strategy="breakout",
     params=None,
-    stop_cross_pct=0.02,
     portfolio=10000.0,
     leverage=1.0,
     cost_bps=10.0,
@@ -79,17 +78,16 @@ async def _insert_config(
     async with get_db() as db:
         cursor = await db.execute(
             """INSERT INTO signal_configs
-                (symbol, interval, strategy, params, stop_cross_pct,
+                (symbol, interval, strategy, params,
                  portfolio, invested_amount, leverage, cost_bps,
                  polling_interval_s, active, last_processed_candle,
                  created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)""",
             (
                 symbol,
                 interval,
                 strategy,
                 params_json,
-                stop_cross_pct,
                 portfolio,
                 None,
                 leverage,
@@ -135,37 +133,34 @@ class TestLastClosedCandleTime:
             _last_closed_candle_time("99x")
 
 
-class TestStopCrossPctCalculation:
+class TestStopBasePersisted:
     @pytest.mark.asyncio
-    async def test_long_stop_trigger(self):
+    async def test_long_stop_base_stored(self):
         await _setup_db()
-        config = await _insert_config(stop_cross_pct=0.02)
-        stop_price = 95.0  # base stop
+        config = await _insert_config()
+        stop_price = 95.0
 
         signal_id = await _create_signal_and_sim_trade(
             config=config,
             side="long",
             trigger_candle_time=1000000,
             stop_price=stop_price,
-            stop_cross_pct=0.02,
         )
         assert signal_id is not None
 
-        # Verify stop_trigger = stop_price * (1 - 0.02)
-        expected_trigger = stop_price * (1.0 - 0.02)
         async with get_db() as db:
             cursor = await db.execute(
-                "SELECT stop_trigger FROM sim_trades WHERE signal_id = ?",
+                "SELECT stop_base FROM sim_trades WHERE signal_id = ?",
                 (signal_id,),
             )
             row = await cursor.fetchone()
         assert row is not None
-        assert abs(row[0] - expected_trigger) < 0.001
+        assert abs(row[0] - stop_price) < 0.001
 
     @pytest.mark.asyncio
-    async def test_short_stop_trigger(self):
+    async def test_short_stop_base_stored(self):
         await _setup_db()
-        config = await _insert_config(stop_cross_pct=0.03)
+        config = await _insert_config()
         stop_price = 105.0
 
         signal_id = await _create_signal_and_sim_trade(
@@ -173,19 +168,17 @@ class TestStopCrossPctCalculation:
             side="short",
             trigger_candle_time=2000000,
             stop_price=stop_price,
-            stop_cross_pct=0.03,
         )
         assert signal_id is not None
 
-        expected_trigger = stop_price * (1.0 + 0.03)
         async with get_db() as db:
             cursor = await db.execute(
-                "SELECT stop_trigger FROM sim_trades WHERE signal_id = ?",
+                "SELECT stop_base FROM sim_trades WHERE signal_id = ?",
                 (signal_id,),
             )
             row = await cursor.fetchone()
         assert row is not None
-        assert abs(row[0] - expected_trigger) < 0.001
+        assert abs(row[0] - stop_price) < 0.001
 
 
 class TestSignalDedup:
@@ -200,7 +193,6 @@ class TestSignalDedup:
             side="long",
             trigger_candle_time=5000000,
             stop_price=95.0,
-            stop_cross_pct=0.02,
         )
         assert sid1 is not None
 
@@ -210,7 +202,6 @@ class TestSignalDedup:
             side="long",
             trigger_candle_time=5000000,
             stop_price=95.0,
-            stop_cross_pct=0.02,
         )
         assert sid2 is None
 
@@ -227,7 +218,6 @@ class TestPortfolioModes:
             side="long",
             trigger_candle_time=8000000,
             stop_price=95.0,
-            stop_cross_pct=0.02,
         )
         async with get_db() as db:
             cursor = await db.execute(
@@ -250,12 +240,12 @@ class TestPortfolioModes:
         async with get_db() as db:
             cursor = await db.execute(
                 """INSERT INTO signal_configs
-                    (symbol, interval, strategy, params, stop_cross_pct,
+                    (symbol, interval, strategy, params,
                      portfolio, invested_amount, leverage, cost_bps,
                      polling_interval_s, active, last_processed_candle,
                      created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)""",
-                ("ETHUSDT", "1d", "breakout", params_json, 0.02, 10000.0, 5000.0, None, 10.0, None, 1, now, now),
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)""",
+                ("ETHUSDT", "1d", "breakout", params_json, 10000.0, 5000.0, None, 10.0, None, 1, now, now),
             )
             await db.commit()
             config_id = cursor.lastrowid
@@ -272,7 +262,6 @@ class TestPortfolioModes:
             side="short",
             trigger_candle_time=9000000,
             stop_price=105.0,
-            stop_cross_pct=0.02,
         )
         async with get_db() as db:
             cursor = await db.execute(
@@ -297,7 +286,6 @@ class TestSimTradeStatus:
             side="long",
             trigger_candle_time=11000000,
             stop_price=95.0,
-            stop_cross_pct=0.02,
         )
         async with get_db() as db:
             cursor = await db.execute(
@@ -317,7 +305,6 @@ class TestSimTradeStatus:
             side="long",
             trigger_candle_time=12000000,
             stop_price=95.0,
-            stop_cross_pct=0.02,
         )
         async with get_db() as db:
             cursor = await db.execute(
