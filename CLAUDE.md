@@ -151,6 +151,15 @@ Frontend-only (placed in `frontend/.env.development.local`, only needed to overr
 - **Patch imported functions at the consumer**: `ensure_candles` and `load_candles_df` are imported into `signal_engine` / `live_tracker`. Patch `backend.signal_engine.ensure_candles` (the binding in that module), not `backend.download_engine.ensure_candles`.
 - `klines` numeric fields are stored as TEXT strings (Binance format) — cast with `str()` on insert, `float()` on read.
 
+### Parity harness (`tests/integration/test_parity.py`)
+
+Replays a fixed klines fixture through both the backtest engine and the live engine (`signal_engine.scan_config` + `live_tracker._fill_pending_entries` + `_check_candle_close_exits`) and asserts trade-log equivalence — same entries, same exits, same exit reasons, same prices.
+
+- Fixtures live in `tests/fixtures/parity/<slot>.json.gz`. Slot A is BTCUSDT 4h 2023-2024 (~4380 candles, ~140 KiB gzipped). Regenerate with `python -m tests.fixtures.parity._seed_slot_a`.
+- The harness drives the live engine candle-by-candle with a mocked clock (`_now_ms`) and skips intrabar polling — the candle-close path mirrors backtest's gap handling exactly, so structural parity holds without it. Intrabar parity is deferred to Phase 5 (after #49 unifies the stop trigger).
+- Comparison is structural: `entry_time, exit_time, side, entry_price, exit_price, normalized exit_reason`. Exit reasons are normalized via `_normalize_exit_reason` (`stop_long`/`stop_intrabar`/`stop_candle` → `"stop"`, etc.). PnL/quantity comparison is parameterized by sizing and waits for #48 (dynamic equity).
+- **Adding a new slot**: drop a `<name>.json.gz` payload (same shape: `{symbol, interval, start_ms, end_ms, step_ms, candles: [...]}`) into `tests/fixtures/parity/`, then add a `_load_slot("<name>")`-driven test method that calls `assert_trade_logs_equal(bt_log, live_log)`. Use `modo_ejecucion=close_current` for clean parity (open_next has a separate exit-fill asymmetry pending review).
+
 ## Deployment
 
 - Container: multi-stage Dockerfile (Node 22 Alpine builds frontend, Python 3.13-slim runs app).
