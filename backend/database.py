@@ -291,6 +291,9 @@ async def init_db() -> None:
                 invested_amount         REAL,
                 leverage                REAL,
                 cost_bps                REAL    NOT NULL DEFAULT 10.0,
+                maintenance_margin_pct  REAL    NOT NULL DEFAULT 0.005,
+                status                  TEXT    NOT NULL DEFAULT 'active',
+                blown_at                TEXT,
                 polling_interval_s      INTEGER,
                 active                  INTEGER NOT NULL DEFAULT 1,
                 last_processed_candle   INTEGER DEFAULT 0,
@@ -327,6 +330,7 @@ async def init_db() -> None:
                 entry_price             REAL,
                 entry_time              INTEGER,
                 stop_base               REAL    NOT NULL,
+                liquidation_price       REAL,
                 exit_price              REAL,
                 exit_time               INTEGER,
                 exit_reason             TEXT,
@@ -451,6 +455,24 @@ async def init_db() -> None:
             "ON notification_log (event_type, reference_type, reference_id, channel)"
         )
         await db.commit()
+
+        # --- leverage liquidation columns (#50) ---
+        cursor = await db.execute("PRAGMA table_info(signal_configs)")
+        sc_cols = {row[1] for row in await cursor.fetchall()}
+        if "maintenance_margin_pct" not in sc_cols:
+            await db.execute("ALTER TABLE signal_configs ADD COLUMN maintenance_margin_pct REAL NOT NULL DEFAULT 0.005")
+            await db.commit()
+        if "status" not in sc_cols:
+            await db.execute("ALTER TABLE signal_configs ADD COLUMN status TEXT NOT NULL DEFAULT 'active'")
+            await db.commit()
+        if "blown_at" not in sc_cols:
+            await db.execute("ALTER TABLE signal_configs ADD COLUMN blown_at TEXT")
+            await db.commit()
+        cursor = await db.execute("PRAGMA table_info(sim_trades)")
+        st_cols = {row[1] for row in await cursor.fetchall()}
+        if "liquidation_price" not in st_cols:
+            await db.execute("ALTER TABLE sim_trades ADD COLUMN liquidation_price REAL")
+            await db.commit()
 
         # --- rename portfolio → initial_portfolio + add current_portfolio (#48) ---
         cursor = await db.execute("PRAGMA table_info(signal_configs)")

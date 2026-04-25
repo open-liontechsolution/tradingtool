@@ -44,9 +44,14 @@ def _last_closed_candle_time(interval: str) -> int:
 
 
 async def _get_active_configs() -> list[dict]:
-    """Load all active signal configs from DB."""
+    """Load all active signal configs from DB.
+
+    A config in ``status='blown'`` is *not* loaded here — it stays inert until
+    the user explicitly calls the reset-equity endpoint (#50). The toggleable
+    ``active`` flag still gates loading independently.
+    """
     async with get_db() as db:
-        cursor = await db.execute("SELECT * FROM signal_configs WHERE active = 1")
+        cursor = await db.execute("SELECT * FROM signal_configs WHERE active = 1 AND status != 'blown'")
         rows = await cursor.fetchall()
         cols = [d[0] for d in cursor.description]
     return [dict(zip(cols, row, strict=False)) for row in rows]
@@ -180,6 +185,12 @@ async def scan_config(config: dict) -> None:
     strategy_name = config["strategy"]
     params: dict = json.loads(config["params"]) if isinstance(config["params"], str) else config["params"]
     last_processed = config["last_processed_candle"] or 0
+
+    # Don't open new positions on a blown account (#50). The user must call
+    # POST /api/signals/configs/{id}/reset-equity to bring it back to active.
+    if config.get("status") == "blown":
+        logger.debug("Config %d is blown — skipping scan", config["id"])
+        return
 
     last_closed = _last_closed_candle_time(interval)
 

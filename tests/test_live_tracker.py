@@ -777,3 +777,240 @@ class TestDynamicEquity:
             row = await cursor.fetchone()
         assert row[0] == pytest.approx(15000.0)
         assert row[1] == pytest.approx(current_before)
+
+
+# ---------------------------------------------------------------------------
+# Tests: Leverage liquidation (#50)
+# ---------------------------------------------------------------------------
+
+
+class TestLiquidationFormula:
+    def test_long_liq_below_entry(self):
+        from backend.live_tracker import _compute_liquidation_price
+
+        # leverage=10, mm=0.005 → factor = 0.1 - 0.005 = 0.095 → liq = 100 * 0.905 = 90.5
+        liq = _compute_liquidation_price(side="long", entry_price=100.0, leverage=10.0, maintenance_margin_pct=0.005)
+        assert liq == pytest.approx(90.5, abs=1e-6)
+
+    def test_short_liq_above_entry(self):
+        from backend.live_tracker import _compute_liquidation_price
+
+        liq = _compute_liquidation_price(side="short", entry_price=100.0, leverage=10.0, maintenance_margin_pct=0.005)
+        # 100 * (1 + 0.095) = 109.5
+        assert liq == pytest.approx(109.5, abs=1e-6)
+
+    def test_no_leverage_returns_none(self):
+        from backend.live_tracker import _compute_liquidation_price
+
+        assert (
+            _compute_liquidation_price(side="long", entry_price=100.0, leverage=1.0, maintenance_margin_pct=0.005)
+            is None
+        )
+
+    def test_excessive_mm_returns_none(self):
+        from backend.live_tracker import _compute_liquidation_price
+
+        # mm > 1/leverage means immediate liquidation — treat as malformed config.
+        assert (
+            _compute_liquidation_price(side="long", entry_price=100.0, leverage=2.0, maintenance_margin_pct=0.6) is None
+        )
+
+
+class TestLiquidationPriority:
+    @pytest.mark.asyncio
+    async def test_long_liquidation_fires_before_stop(self):
+        """If price crosses liquidation_price the trade closes 'liquidated' at liq."""
+        await _setup_db()
+        config_id = await _insert_config(cost_bps=0.0, leverage=10.0)
+        signal_id = await _insert_signal(config_id, stop_price=80.0)
+        # Manually set liquidation_price=90.5 (formula applied at fill in real flow).
+        trade_id = await _insert_sim_trade(
+            signal_id,
+            config_id,
+            status="open",
+            side="long",
+            entry_price=100.0,
+            stop_base=80.0,
+            quantity=100.0,
+            invested_amount=100_000.0,  # leveraged
+            leverage=10.0,
+            fees=0.0,
+        )
+        async with get_db() as db:
+            await db.execute(
+                "UPDATE sim_trades SET liquidation_price = 90.5 WHERE id = ?",
+                (trade_id,),
+            )
+            await db.commit()
+
+        # Price 89 < liq=90.5 < stop=80 (long: liq above stop). Liquidation wins.
+        with patch("backend.live_tracker.binance_client") as mock_client:
+            mock_client.get_ticker_price = AsyncMock(return_value=89.0)
+            mock_client.rate_limit = MagicMock()
+            mock_client.rate_limit.used_weight = 10
+            mock_client.rate_limit.weight_limit = 1200
+            await _check_intrabar_stops()
+
+        async with get_db() as db:
+            cursor = await db.execute(
+                "SELECT status, exit_reason, exit_price FROM sim_trades WHERE id = ?",
+                (trade_id,),
+            )
+            row = await cursor.fetchone()
+        assert row[0] == "closed"
+        assert row[1] == "liquidated"
+        # Exec at liquidation_price, not at stop_base or actual price.
+        assert row[2] == pytest.approx(90.5, abs=1e-6)
+
+    @pytest.mark.asyncio
+    async def test_no_liquidation_when_price_above_liq(self):
+        """Stop fires normally if price doesn't reach liquidation_price."""
+        await _setup_db()
+        config_id = await _insert_config(cost_bps=0.0, leverage=10.0)
+        signal_id = await _insert_signal(config_id, stop_price=95.0)
+        trade_id = await _insert_sim_trade(
+            signal_id,
+            config_id,
+            status="open",
+            side="long",
+            entry_price=100.0,
+            stop_base=95.0,
+            quantity=100.0,
+            invested_amount=100_000.0,
+            leverage=10.0,
+            fees=0.0,
+        )
+        async with get_db() as db:
+            await db.execute(
+                "UPDATE sim_trades SET liquidation_price = 90.5 WHERE id = ?",
+                (trade_id,),
+            )
+            await db.commit()
+
+        # Price 94 below stop=95, above liq=90.5 → stop_intrabar (not liquidated).
+        with patch("backend.live_tracker.binance_client") as mock_client:
+            mock_client.get_ticker_price = AsyncMock(return_value=94.0)
+            mock_client.rate_limit = MagicMock()
+            mock_client.rate_limit.used_weight = 10
+            mock_client.rate_limit.weight_limit = 1200
+            await _check_intrabar_stops()
+
+        async with get_db() as db:
+            cursor = await db.execute(
+                "SELECT exit_reason FROM sim_trades WHERE id = ?",
+                (trade_id,),
+            )
+            row = await cursor.fetchone()
+        assert row[0] == "stop_intrabar"
+
+
+class TestBlownAccountTransition:
+    @pytest.mark.asyncio
+    async def test_clamp_to_zero_and_mark_blown(self):
+        """When current_portfolio drops to 0, status flips to 'blown'."""
+        from backend.live_tracker import _maybe_mark_blown
+
+        await _setup_db()
+        config_id = await _insert_config()
+
+        # Drain equity into the negative.
+        async with get_db() as db:
+            await db.execute(
+                "UPDATE signal_configs SET current_portfolio = ? WHERE id = ?",
+                (-500.0, config_id),
+            )
+            await db.commit()
+
+        with patch("backend.live_tracker.notify_event", new=AsyncMock()) as mock_notify:
+            await _maybe_mark_blown(config_id, _now_iso())
+
+        async with get_db() as db:
+            cursor = await db.execute(
+                "SELECT current_portfolio, status, blown_at FROM signal_configs WHERE id = ?",
+                (config_id,),
+            )
+            row = await cursor.fetchone()
+        assert row[0] == pytest.approx(0.0)
+        assert row[1] == "blown"
+        assert row[2] is not None
+        mock_notify.assert_called_once()
+        assert mock_notify.call_args.kwargs["event_type"] == "account_blown"
+
+    @pytest.mark.asyncio
+    async def test_no_op_when_equity_positive(self):
+        from backend.live_tracker import _maybe_mark_blown
+
+        await _setup_db()
+        config_id = await _insert_config()
+        with patch("backend.live_tracker.notify_event", new=AsyncMock()) as mock_notify:
+            await _maybe_mark_blown(config_id, _now_iso())
+
+        async with get_db() as db:
+            cursor = await db.execute(
+                "SELECT status FROM signal_configs WHERE id = ?",
+                (config_id,),
+            )
+            row = await cursor.fetchone()
+        assert row[0] == "active"
+        mock_notify.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_blown_config_not_loaded_by_active_query(self):
+        """``_get_active_configs`` excludes blown rows (no new signals)."""
+        from backend.signal_engine import _get_active_configs
+
+        await _setup_db()
+        active_id = await _insert_config()
+        blown_id = await _insert_config(symbol="ETHUSDT", interval="4h")
+
+        async with get_db() as db:
+            await db.execute(
+                "UPDATE signal_configs SET status = 'blown', blown_at = ? WHERE id = ?",
+                (_now_iso(), blown_id),
+            )
+            await db.commit()
+
+        configs = await _get_active_configs()
+        ids = {c["id"] for c in configs}
+        assert active_id in ids
+        assert blown_id not in ids
+
+
+class TestResetEquity:
+    @pytest.mark.asyncio
+    async def test_reset_restores_initial_and_clears_blown(self):
+        """Reset-equity flow: status='blown' + drained portfolio → back to active."""
+        await _setup_db()
+        config_id = await _insert_config()
+
+        # Force blown state with drained portfolio.
+        async with get_db() as db:
+            await db.execute(
+                "UPDATE signal_configs SET status = 'blown', blown_at = ?, current_portfolio = 0 WHERE id = ?",
+                (_now_iso(), config_id),
+            )
+            await db.commit()
+
+        # Mimic the endpoint side effect.
+        async with get_db() as db:
+            cursor = await db.execute(
+                "SELECT initial_portfolio FROM signal_configs WHERE id = ?",
+                (config_id,),
+            )
+            initial = float((await cursor.fetchone())[0])
+            await db.execute(
+                "UPDATE signal_configs SET current_portfolio = ?, status = 'active', "
+                "blown_at = NULL, updated_at = ? WHERE id = ?",
+                (initial, _now_iso(), config_id),
+            )
+            await db.commit()
+
+        async with get_db() as db:
+            cursor = await db.execute(
+                "SELECT current_portfolio, status, blown_at FROM signal_configs WHERE id = ?",
+                (config_id,),
+            )
+            row = await cursor.fetchone()
+        assert row[0] == pytest.approx(initial)
+        assert row[1] == "active"
+        assert row[2] is None
