@@ -23,7 +23,7 @@ function App() {
   if (isLoading) {
     return (
       <div className="app-layout" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh' }}>
-        <p style={{ color: '#94a3b8', fontSize: '1rem' }}>Loading...</p>
+        <p style={{ color: 'var(--text-secondary)', fontSize: '1rem' }} role="status" aria-live="polite">Loading...</p>
       </div>
     )
   }
@@ -32,12 +32,14 @@ function App() {
   if (!isAuthenticated) {
     return (
       <div className="app-layout" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh' }}>
-        <div style={{ textAlign: 'center' }}>
-          <div className="topbar-logo" style={{ margin: '0 auto 1rem', width: 48, height: 48, fontSize: '1.5rem' }}>
+        <div style={{ textAlign: 'center', maxWidth: 420, padding: '0 var(--space-4)' }}>
+          <div className="topbar-logo" style={{ margin: '0 auto var(--space-4)', width: 48, height: 48, fontSize: '1.5rem' }} aria-hidden="true">
             <span>T</span>
           </div>
-          <h1 style={{ color: '#e2e8f0', fontSize: '1.5rem', marginBottom: '0.5rem' }}>Trading Tools Laboratory</h1>
-          <p style={{ color: '#94a3b8', marginBottom: '1.5rem' }}>Sign in to continue</p>
+          <h1 style={{ color: 'var(--text-primary)', fontSize: '1.5rem', marginBottom: 'var(--space-2)' }}>Trading Tools Laboratory</h1>
+          <p style={{ color: 'var(--text-secondary)', marginBottom: 'var(--space-5)', lineHeight: 1.5 }}>
+            Plataforma para descargar datos históricos de Binance, ejecutar backtests y monitorizar señales y trades simulados en vivo.
+          </p>
           <button className="btn btn-primary" onClick={login} style={{ padding: '0.6rem 2rem', fontSize: '1rem' }}>
             Sign in
           </button>
@@ -74,15 +76,15 @@ function App() {
         </nav>
 
         <div className="topbar-user">
-          <span style={{ color: '#94a3b8', fontSize: '0.85rem', marginRight: '0.75rem' }}>{username}</span>
+          <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginRight: 'var(--space-3)' }}>{username}</span>
           <button
             onClick={logout}
             style={{
               background: 'transparent',
-              border: '1px solid #475569',
-              color: '#94a3b8',
+              border: '1px solid var(--text-muted)',
+              color: 'var(--text-secondary)',
               padding: '0.3rem 0.75rem',
-              borderRadius: '4px',
+              borderRadius: 'var(--radius-sm)',
               cursor: 'pointer',
               fontSize: '0.8rem',
             }}

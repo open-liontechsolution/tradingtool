@@ -91,10 +91,15 @@ function StatusBadge({ status }) {
 }
 
 /* ---- Toggle switch ---- */
-function ToggleSwitch({ checked, onChange, disabled }) {
+function ToggleSwitch({ checked, onChange, disabled, ariaLabel }) {
   return (
     <button
       type="button"
+      role="switch"
+      aria-checked={!!checked}
+      aria-label={ariaLabel}
+      aria-disabled={disabled || undefined}
+      disabled={disabled}
       onClick={() => !disabled && onChange(!checked)}
       style={{
         width: 44, height: 24, borderRadius: 12, border: 'none', cursor: disabled ? 'default' : 'pointer',
@@ -105,7 +110,7 @@ function ToggleSwitch({ checked, onChange, disabled }) {
     >
       <span style={{
         position: 'absolute', top: 2, left: checked ? 22 : 2,
-        width: 20, height: 20, borderRadius: '50%', background: '#fff',
+        width: 20, height: 20, borderRadius: '50%', background: 'var(--text-primary)',
         transition: 'left var(--transition-fast)',
       }} />
     </button>
@@ -377,11 +382,16 @@ function ConfigsList({ configs, onToggle, onToggleTelegram, onDelete, onResetEqu
                 <td className="ta-right num-col" style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}>
                   {c.id}
                   {blown && (
-                    <span title={`Blown at ${c.blown_at ?? ''}`} style={{
-                      marginLeft: 6, padding: '1px 6px', borderRadius: 'var(--radius-sm)',
-                      background: 'rgba(239,68,68,0.2)', color: 'var(--color-danger)',
-                      fontSize: '0.7rem', fontWeight: 700, letterSpacing: '0.03em',
-                    }}>BLOWN</span>
+                    <span
+                      title={`Blown at ${c.blown_at ?? ''}`}
+                      aria-label={`Account blown at ${c.blown_at ?? 'unknown date'}`}
+                      style={{
+                        marginLeft: 6, padding: '1px 6px', borderRadius: 'var(--radius-sm)',
+                        background: 'rgba(239,68,68,0.2)', color: 'var(--color-danger)',
+                        fontSize: '0.7rem', fontWeight: 700, letterSpacing: '0.03em',
+                      }}>
+                      <span aria-hidden="true">⚠ </span>BLOWN
+                    </span>
                   )}
                 </td>
                 <td>{c.symbol}</td>
@@ -393,10 +403,19 @@ function ConfigsList({ configs, onToggle, onToggleTelegram, onDelete, onResetEqu
                   {deltaPct === 0 ? '—' : (deltaPct > 0 ? '+' : '') + deltaPct.toFixed(2) + '%'}
                 </td>
                 <td className="ta-center">
-                  <ToggleSwitch checked={c.active} onChange={(val) => onToggle(c.id, val)} disabled={blown} />
+                  <ToggleSwitch
+                    checked={c.active}
+                    onChange={(val) => onToggle(c.id, val)}
+                    disabled={blown}
+                    ariaLabel={`Activar config ${c.id} (${c.symbol} ${c.strategy})`}
+                  />
                 </td>
                 <td className="ta-center">
-                  <ToggleSwitch checked={!!c.telegram_enabled} onChange={(val) => onToggleTelegram(c.id, val)} />
+                  <ToggleSwitch
+                    checked={!!c.telegram_enabled}
+                    onChange={(val) => onToggleTelegram(c.id, val)}
+                    ariaLabel={`Notificaciones Telegram para config ${c.id} (${c.symbol} ${c.strategy})`}
+                  />
                 </td>
                 <td className="ta-center" style={{ display: 'flex', gap: 4, justifyContent: 'center' }}>
                   {blown && (
@@ -582,8 +601,12 @@ function SimTradesList({ trades, onClose }) {
                   </td>
                   <td className="ta-right num-col">{t.exit_price ? fmtNum(t.exit_price, 4) : '—'}</td>
                   <td>{t.exit_reason || '—'}</td>
-                  <td className="ta-right num-col" style={{ color: pnlColor, fontWeight: 600 }}>{t.pnl != null ? fmtMoney(t.pnl) : '—'}</td>
-                  <td className="ta-right num-col" style={{ color: pnlColor }}>{t.pnl_pct != null ? fmtNum(t.pnl_pct * 100, 2) + '%' : '—'}</td>
+                  <td className="ta-right num-col" style={{ color: pnlColor, fontWeight: 600 }}>
+                    {t.pnl != null ? (t.pnl > 0 ? '+' : '') + fmtMoney(t.pnl) : '—'}
+                  </td>
+                  <td className="ta-right num-col" style={{ color: pnlColor }}>
+                    {t.pnl_pct != null ? (t.pnl_pct > 0 ? '+' : '') + fmtNum(t.pnl_pct * 100, 2) + '%' : '—'}
+                  </td>
                   <td><StatusBadge status={t.status} /></td>
                   <td className="ta-center">
                     {t.status === 'open' && (
