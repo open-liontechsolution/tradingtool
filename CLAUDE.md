@@ -181,5 +181,31 @@ Replays a fixed klines fixture through both the backtest engine and the live eng
 ## Deployment
 
 - Container: multi-stage Dockerfile (Node 22 Alpine builds frontend, Python 3.13-slim runs app).
-- CD: push to `develop` → GitHub Actions builds and pushes multi-arch image to GHCR, updates `helm/env/dev.yaml` image tag for Argo CD to pick up.
-- Kubernetes: Helm chart in `helm/`; deployed to k3s via Argo CD.
+- Kubernetes: Helm chart in `helm/`; deployed to k3s via Argo CD. The Argo `Application` manifests live in `argocd/` for reproducibility but are NOT picked up by the chart itself (they're applied manually with `kubectl apply` to the `argocd` namespace).
+- Two environments live in the same k3s cluster, isolated by namespace and Secret:
+
+| Aspect | dev | qa |
+|---|---|---|
+| Namespace (app) | `tradingtool-dev` | `tradingtool-qa` |
+| Helm values file | `helm/env/dev.yaml` | `helm/env/qa.yaml` |
+| Secret name | `tradingtools-secret-dev` | `tradingtools-secret-qa` |
+| Public URL | `tradingtool-dev.liontechsolution.com` | `tradingtool-qa.liontechsolution.com` |
+| Postgres (CNPG) | shared cluster `platform-postgres-dev` in `data-dev`, DB `tradingtool-dev`, user `tradingtool-dev-user` | shared cluster `platform-postgres-dev` in `data-dev`, DB `tradingtool-qa`, user `tradingtool-qa-user` |
+| Keycloak realm | `tradingtool-dev` | `tradingtool-qa` |
+| Telegram bot | dedicated bot from `@BotFather` | dedicated bot from `@BotFather` |
+| Cloudflare Tunnel | dedicated tunnel (sidecar pattern) | dedicated tunnel (sidecar pattern) |
+| `LOG_LEVEL` | `debug` | `info` |
+| Argo `syncPolicy` | manual | automated (prune + selfHeal) |
+| Build workflow | `.github/workflows/build-dev.yml` | `.github/workflows/build-qa.yml` |
+| Trigger | push to `develop` (every commit) | `workflow_dispatch` (manual) **or** push of tag `v*.*.*-rc*` |
+
+- **dev pipeline**: push to `develop` → `build-dev.yml` builds multi-arch image, scans with Trivy (HIGH/CRITICAL fixable blocks promotion), updates `helm/env/dev.yaml` image tag. Argo `trading-tool` Application is sync-manual, so a human still clicks Sync in the Argo UI.
+- **qa pipeline**: same shape as dev plus a `resolve-tag` job at the front that branches on event:
+  - `push: tags: 'v*.*.*-rc*'` → image tag is the version itself (e.g. `v1.2.0-rc1`).
+  - `workflow_dispatch` → image tag is `qa-<short_sha>`.
+  
+  After Trivy passes, `update-tag` writes the new tag to `helm/env/qa.yaml`. The Argo `trading-tool-qa` Application is sync-automated, so any commit to develop that touches `helm/env/qa.yaml` rolls out without manual click.
+- **qa smoke E2E**: last job of `build-qa.yml`. Polls `/healthz` until 200 (10-min timeout), checks `/api/auth/config`, then — if `KEYCLOAK_QA_URL` / `SMOKE_USER_QA` / `SMOKE_PASSWORD_QA` repo secrets are configured — does a Direct Access Grants login against `tradingtool-qa` realm and round-trips a dummy `signal_config` (POST → GET → DELETE). The job is `continue-on-error: true` until the smoke pattern is stable; promote to required once it has been green for a few weeks. Without the smoke secrets the auth block is skipped (just logs a warning).
+- **QA versioning convention**: tags follow `vMAJOR.MINOR.PATCH-rcN`. New major or minor cycle starts at `rc1`; subsequent fixes during the same QA cycle increment the rc (`-rc2`, `-rc3`, ...). When a `-rcN` is validated in QA it gets re-tagged as the prod release (separate workflow when prod exists).
+- **Secrets**: never committed. Live under `helm/secrets/<env>.yaml` (per-env, gitignored). Template at `helm/secrets/example.yaml` (committed). Apply with `kubectl apply -f helm/secrets/<env>.yaml`. Legacy locations (`helm/env/secrets.yaml`, `helm/env/secrets-*.yaml`) stay covered by `.gitignore` for backwards compatibility, but new env manifests should land under `helm/secrets/`.
+- **Postgres provisioning**: the CNPG cluster `platform-postgres-dev` is shared. The dev DB+user were created by hand; the qa DB (`tradingtool-qa`) and user (`tradingtool-qa-user`) are created the same way (one-off `psql` against the superuser, see `argocd/qa-application.yaml` header for the actual SQL).

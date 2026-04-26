@@ -1,0 +1,19 @@
+image:
+  tag: "qa-rc1"
+namespace:
+  name: "tradingtool-qa"
+  create: true
+config:
+  LOG_LEVEL: "info"
+  AUTH_ENABLED: "true"
+  CORS_ORIGINS: "*"
+  KEYCLOAK_REALM: "tradingtool-qa"
+existingSecret: "tradingtools-secret-qa"
+cloudflareTunnel:
+  enabled: true
+  existingSecret: "tradingtools-secret-qa"
+networkPolicy:
+  enabled: true
+  # CNPG cluster `platform-postgres-dev` is shared between dev and qa;
+  # only the database + user differ. Egress target stays `data-dev`.
+  postgresNamespace: "data-dev"

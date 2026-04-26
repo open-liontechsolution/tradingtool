@@ -1,0 +1,242 @@
+name: Build & Push QA Image
+
+on:
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: "Why a manual QA build (free text, ends up in run summary)"
+        required: false
+        default: "ad-hoc"
+  push:
+    tags:
+      - "v*.*.*-rc*"
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: open-liontechsolution/tradingtools
+
+jobs:
+  resolve-tag:
+    name: Resolve image tag
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.tag.outputs.image_tag }}
+      short_sha: ${{ steps.tag.outputs.short_sha }}
+      is_release_tag: ${{ steps.tag.outputs.is_release_tag }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Compute tag
+        id: tag
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          set -euo pipefail
+          short="${GITHUB_SHA::7}"
+          echo "short_sha=$short" >> "$GITHUB_OUTPUT"
+          if [ "$REF_TYPE" = "tag" ]; then
+            # Release-candidate flow: image tag is the version itself (e.g. v1.2.0-rc1).
+            echo "image_tag=$REF_NAME" >> "$GITHUB_OUTPUT"
+            echo "is_release_tag=true" >> "$GITHUB_OUTPUT"
+          else
+            # Manual workflow_dispatch: short-sha tag, qa- prefix.
+            echo "image_tag=qa-$short" >> "$GITHUB_OUTPUT"
+            echo "is_release_tag=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  build-and-push:
+    name: Build and push Docker image to GHCR
+    needs: resolve-tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image_digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: production
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.resolve-tag.outputs.image_tag }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:qa-latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Delete old package versions (keep last 10)
+        uses: actions/delete-package-versions@v5
+        with:
+          package-name: tradingtools
+          package-type: container
+          min-versions-to-keep: 10
+          delete-only-untagged-versions: false
+
+  scan-image:
+    name: Trivy scan (HIGH/CRITICAL blocks promotion)
+    needs:
+      - resolve-tag
+      - build-and-push
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Trivy vulnerability scan
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ needs.build-and-push.outputs.image_digest }}
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          format: table
+          vuln-type: os,library
+
+  update-tag:
+    name: Update qa image tag for Argo CD
+    needs:
+      - resolve-tag
+      - build-and-push
+      - scan-image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.TT_APP_ID }}
+          private-key: ${{ secrets.TT_APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@v6
+        with:
+          ref: develop
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Install yq
+        uses: mikefarah/yq@v4
+
+      - name: Update image tag in qa values
+        env:
+          IMAGE_TAG: ${{ needs.resolve-tag.outputs.image_tag }}
+        run: |
+          yq -i '.image.tag = strenv(IMAGE_TAG)' helm/env/qa.yaml
+
+      - name: Commit and push
+        env:
+          IMAGE_TAG: ${{ needs.resolve-tag.outputs.image_tag }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add helm/env/qa.yaml
+          if git diff --cached --quiet; then
+            echo "No changes to helm/env/qa.yaml — skipping commit"
+            exit 0
+          fi
+          git commit -m "cd(qa): update image tag to $IMAGE_TAG"
+          git push origin develop
+
+  smoke-e2e:
+    name: Smoke E2E (post-deploy)
+    needs:
+      - resolve-tag
+      - update-tag
+    runs-on: ubuntu-latest
+    # Initial soft-gate — flips to required once the smoke is stable.
+    continue-on-error: true
+    env:
+      QA_BASE_URL: https://tradingtool-qa.liontechsolution.com
+      KEYCLOAK_REALM: tradingtool-qa
+      KEYCLOAK_CLIENT_ID: tradingtool-api
+    steps:
+      - name: Wait for /healthz
+        run: |
+          set -euo pipefail
+          deadline=$(( $(date +%s) + 600 ))
+          until curl -fsS "$QA_BASE_URL/healthz" > /dev/null; do
+            now=$(date +%s)
+            if [ "$now" -ge "$deadline" ]; then
+              echo "Timeout: $QA_BASE_URL/healthz never returned 200 within 10 min" >&2
+              exit 1
+            fi
+            echo "Waiting for QA app to come up..."
+            sleep 15
+          done
+          echo "App is healthy."
+
+      - name: Verify /api/auth/config returns 200
+        run: |
+          curl -fsS "$QA_BASE_URL/api/auth/config" | head -c 200
+          echo ""
+
+      - name: Login as service user (Direct Access Grants)
+        id: login
+        env:
+          KEYCLOAK_URL: ${{ secrets.KEYCLOAK_QA_URL }}
+          SMOKE_USER: ${{ secrets.SMOKE_USER_QA }}
+          SMOKE_PASSWORD: ${{ secrets.SMOKE_PASSWORD_QA }}
+        run: |
+          set -euo pipefail
+          if [ -z "${KEYCLOAK_URL}" ] || [ -z "${SMOKE_USER}" ] || [ -z "${SMOKE_PASSWORD}" ]; then
+            echo "::warning::SMOKE_USER_QA / SMOKE_PASSWORD_QA / KEYCLOAK_QA_URL not set — skipping authenticated smoke"
+            echo "skipped=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          token=$(curl -fsS -X POST \
+            "${KEYCLOAK_URL%/}/realms/${KEYCLOAK_REALM}/protocol/openid-connect/token" \
+            -d "client_id=${KEYCLOAK_CLIENT_ID}" \
+            -d "username=${SMOKE_USER}" \
+            -d "password=${SMOKE_PASSWORD}" \
+            -d "grant_type=password" \
+            -d "scope=openid" \
+            | jq -r '.access_token')
+          if [ -z "$token" ] || [ "$token" = "null" ]; then
+            echo "Token retrieval failed" >&2
+            exit 1
+          fi
+          echo "::add-mask::$token"
+          echo "token=$token" >> "$GITHUB_OUTPUT"
+          echo "skipped=false" >> "$GITHUB_OUTPUT"
+
+      - name: Round-trip a dummy signal_config
+        if: steps.login.outputs.skipped == 'false'
+        env:
+          TOKEN: ${{ steps.login.outputs.token }}
+        run: |
+          set -euo pipefail
+          payload='{"symbol":"BTCUSDT","interval":"1d","strategy":"breakout","strategy_params":{"lookback":20,"stop_pct":2.0},"initial_portfolio":1000,"leverage":1,"capital_mode":"leverage","cost_bps":10,"telegram_enabled":false,"active":false}'
+          created=$(curl -fsS -X POST "$QA_BASE_URL/api/signals/configs" \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$payload")
+          id=$(jq -r '.id' <<<"$created")
+          echo "Created config id=$id"
+          curl -fsS -H "Authorization: Bearer $TOKEN" "$QA_BASE_URL/api/signals/configs" \
+            | jq -e ".[] | select(.id == $id)" > /dev/null
+          curl -fsS -X DELETE -H "Authorization: Bearer $TOKEN" "$QA_BASE_URL/api/signals/configs/$id"
+          echo "Round-trip OK."

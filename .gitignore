@@ -49,8 +49,15 @@ Thumbs.db
 # Alembic generated (keep versions/ tracked, ignore auto-generated cache)
 alembic/__pycache__/
 
-# helm
+# helm — secret manifests live outside the repo, organised per env
+# under helm/secrets/. The example template is committed; the real
+# manifests (helm/secrets/<env>.yaml) are not.
+helm/secrets/*.yaml
+!helm/secrets/example.yaml
+# Legacy locations from before the helm/secrets/ reorg — kept ignored
+# so old local checkouts don't accidentally commit them.
 helm/env/secrets.yaml
+helm/env/secrets-*.yaml
 
 # Claude
 .claude

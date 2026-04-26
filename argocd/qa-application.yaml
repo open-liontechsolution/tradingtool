@@ -1,0 +1,43 @@
+# Argo CD Application for the QA environment.
+#
+# Apply manually (one-off) with:
+#   kubectl apply -f argocd/qa-application.yaml
+#
+# Sync policy is automated: any commit to develop that changes
+# helm/env/qa.yaml (typically the image tag bump pushed by build-qa.yml)
+# is rolled out automatically. The human gate lives at the tag step
+# (`vX.Y.Z-rcN`) or workflow_dispatch.
+#
+# This file is NOT picked up by the Application itself — it lives outside
+# `helm/` to avoid recursive sync.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: trading-tool-qa
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/open-liontechsolution/tradingtool.git
+    path: helm
+    targetRevision: develop
+    helm:
+      valueFiles:
+        - values.yaml
+        - env/qa.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: tradingtool-qa
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 5m
