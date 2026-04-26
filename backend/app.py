@@ -13,6 +13,9 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 from starlette.responses import Response
 
 from backend.api.backtest_routes import router as backtest_router
@@ -34,6 +37,7 @@ from backend.config import (
 )
 from backend.database import get_db, init_db
 from backend.live_tracker import run_live_tracker
+from backend.rate_limit import limiter
 from backend.signal_engine import run_signal_scanner
 from backend.telegram_client import set_webhook as telegram_set_webhook
 
@@ -67,6 +71,13 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
+
+# Rate limiting — `application_limits` (set in backend.rate_limit) caps every
+# request per-client at 60/min by default. The middleware short-circuits with
+# a 429 when the bucket is exhausted; the handler renders a clean JSON body.
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
 
 app.add_middleware(
     CORSMiddleware,
