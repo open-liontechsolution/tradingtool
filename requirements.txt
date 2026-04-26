@@ -10,3 +10,4 @@ numpy>=1.26.0
 pydantic>=2.7.0
 PyJWT>=2.8.0
 cryptography>=42.0.0
+slowapi>=0.1.9
