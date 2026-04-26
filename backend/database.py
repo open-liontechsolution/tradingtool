@@ -300,8 +300,13 @@ async def init_db() -> None:
                 created_at              TEXT    NOT NULL,
                 updated_at              TEXT    NOT NULL
             );
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_signal_configs_unique
-                ON signal_configs (symbol, interval, strategy, params);
+            -- Unique index is scoped per user so that two users can run the
+            -- same (symbol, interval, strategy, params) tuple independently.
+            -- The legacy name `idx_signal_configs_unique` (without user_id)
+            -- is dropped by the migration block in this same function for
+            -- pre-existing SQLite DBs.
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_signal_configs_user_unique
+                ON signal_configs (user_id, symbol, interval, strategy, params);
 
             CREATE TABLE IF NOT EXISTS signals (
                 id                      INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -425,6 +430,11 @@ async def init_db() -> None:
 
         # Ensure index exists (safe even if column was just added)
         await db.execute("CREATE INDEX IF NOT EXISTS idx_signal_configs_user ON signal_configs (user_id)")
+        # Drop the legacy unique index that ignored user_id (cross-user
+        # collision: Alice's config blocked Bob from creating the same
+        # symbol/interval/strategy/params). The CREATE UNIQUE INDEX in the
+        # CREATE TABLE block above already establishes the per-user variant.
+        await db.execute("DROP INDEX IF EXISTS idx_signal_configs_unique")
         await db.commit()
 
         # --- users: Telegram link columns --------------------------------
