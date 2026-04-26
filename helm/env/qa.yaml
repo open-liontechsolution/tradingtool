@@ -6,7 +6,7 @@ namespace:
 config:
   LOG_LEVEL: "info"
   AUTH_ENABLED: "true"
-  CORS_ORIGINS: "*"
+  CORS_ORIGINS: "https://tradingtool-qa.liontechsolution.com"
   KEYCLOAK_REALM: "tradingtool-qa"
 existingSecret: "tradingtools-secret-qa"
 cloudflareTunnel:
