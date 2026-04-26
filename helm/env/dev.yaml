@@ -1,5 +1,5 @@
 image:
-  tag: "dev-cdf2054"
+  tag: "dev-45db400"
 namespace:
   name: "tradingtool-dev"
   create: true
