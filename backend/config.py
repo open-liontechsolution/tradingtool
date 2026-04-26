@@ -34,7 +34,28 @@ KEYCLOAK_FRONTEND_CLIENT_ID: str = os.environ.get("KEYCLOAK_FRONTEND_CLIENT_ID",
 PORT: int = int(os.environ.get("PORT", "8000"))
 HOST: str = os.environ.get("HOST", "0.0.0.0")
 LOG_LEVEL: str = os.environ.get("LOG_LEVEL", "info")
-CORS_ORIGINS: list[str] = [o.strip() for o in os.environ.get("CORS_ORIGINS", "*").split(",") if o.strip()]
+
+
+def _resolve_cors_origins(raw: str, auth_enabled: bool) -> list[str]:
+    """Parse CORS_ORIGINS and refuse the wildcard when auth is real.
+
+    The combination ``Access-Control-Allow-Origin: *`` + credentials is also
+    rejected by browsers, but more importantly we don't want to ship that
+    config to a deployment where AUTH_ENABLED=true. Wildcard stays valid for
+    local dev (AUTH_ENABLED=false) so the default zero-config flow still
+    works.
+    """
+    items = [o.strip() for o in raw.split(",") if o.strip()]
+    if items == ["*"] and auth_enabled:
+        raise RuntimeError(
+            "CORS_ORIGINS=* is unsafe when AUTH_ENABLED=true. "
+            "Set CORS_ORIGINS to a comma-separated list of trusted origins "
+            "(e.g. https://tradingtool-dev.liontechsolution.com)."
+        )
+    return items
+
+
+CORS_ORIGINS: list[str] = _resolve_cors_origins(os.environ.get("CORS_ORIGINS", "*"), AUTH_ENABLED)
 
 PUBLIC_BASE_URL: str = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
 

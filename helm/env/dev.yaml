@@ -6,7 +6,7 @@ namespace:
 config:
   LOG_LEVEL: "debug"
   AUTH_ENABLED: "true"
-  CORS_ORIGINS: "*"
+  CORS_ORIGINS: "https://tradingtool-dev.liontechsolution.com"
 existingSecret: "tradingtools-secret-dev"
 cloudflareTunnel:
   enabled: true
