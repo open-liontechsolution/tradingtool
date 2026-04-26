@@ -77,6 +77,28 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    """Attach baseline security headers to every response.
+
+    CSP is intentionally NOT included here yet — it needs end-to-end
+    validation in QA against the OIDC/silent-renew iframe and the
+    Google Fonts loaded by index.css before we enforce. Tracked
+    separately. The four headers below are safe-by-construction
+    (no allowlist tuning needed) and add immediate value.
+    """
+    response = await call_next(request)
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    # HSTS only takes effect over HTTPS, browsers ignore it on http://.
+    response.headers.setdefault(
+        "Strict-Transport-Security",
+        "max-age=31536000; includeSubDomains",
+    )
+    return response
+
+
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     body = await request.body()
