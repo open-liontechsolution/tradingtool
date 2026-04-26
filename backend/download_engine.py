@@ -117,6 +117,10 @@ async def _upsert_candles(db: aiosqlite.Connection, candles: list[dict]) -> int:
         cols = ", ".join(_KLINE_COLS)
         placeholders = ", ".join("?" for _ in _KLINE_COLS)
         conflict_set = ", ".join(f"{c} = EXCLUDED.{c}" for c in _KLINE_UPDATE_COLS)
+        # SAFE: cols, placeholders and conflict_set are derived from
+        # _KLINE_COLS / _KLINE_UPDATE_COLS, both module-level constants
+        # with hardcoded column names — no user input flows into the SQL
+        # string. Row values still go through the parameter binding below.
         query = (
             f"INSERT INTO klines ({cols}) VALUES ({placeholders}) "
             f"ON CONFLICT (symbol, interval, open_time) DO UPDATE SET {conflict_set}"
@@ -183,6 +187,9 @@ async def _update_job(
         values.append(gaps_found)
 
     values.append(job_id)
+    # SAFE: `fields` entries are appended above from a closed set of literals
+    # ("status=?", "candles_downloaded=?", ...). No user input flows into the
+    # SQL fragment — only the values are bound through the placeholder list.
     await db.execute(f"UPDATE download_jobs SET {', '.join(fields)} WHERE id=?", values)
     await db.commit()
 

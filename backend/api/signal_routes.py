@@ -208,6 +208,9 @@ async def patch_signal_config(
     values.append(user.id)
 
     async with get_db() as db:
+        # SAFE: `fields` entries are appended above from a closed set of
+        # literals derived from the SignalConfigPatch Pydantic model fields,
+        # not from user input. Values bind through the placeholders.
         cursor = await db.execute(
             f"UPDATE signal_configs SET {', '.join(fields)} WHERE id = ? AND user_id = ?",
             values,
@@ -715,6 +718,9 @@ async def patch_real_trade(
     values.append(trade_id)
 
     async with get_db() as db:
+        # SAFE: `fields` entries are appended above from a closed set of
+        # literals derived from the RealTradePatch Pydantic model fields,
+        # not from user input. Values bind through the placeholders.
         cursor = await db.execute(
             f"UPDATE real_trades SET {', '.join(fields)} WHERE id = ?",
             values,
