@@ -83,14 +83,6 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Delete old package versions (keep last 10)
-        uses: actions/delete-package-versions@v5
-        with:
-          package-name: tradingtools
-          package-type: container
-          min-versions-to-keep: 10
-          delete-only-untagged-versions: false
-
   scan-image:
     name: Trivy scan (HIGH/CRITICAL blocks promotion)
     needs:
@@ -240,3 +232,25 @@ jobs:
             | jq -e ".[] | select(.id == $id)" > /dev/null
           curl -fsS -X DELETE -H "Authorization: Bearer $TOKEN" "$QA_BASE_URL/api/signals/configs/$id"
           echo "Round-trip OK."
+
+  cleanup-old-versions:
+    name: Clean up old GHCR package versions
+    needs:
+      - build-and-push
+      - scan-image
+      - update-tag
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    steps:
+      # Multi-arch images create 1 manifest list + 2 platform children per push.
+      # Keeping 15 versions retains ~5 multi-arch builds. Runs *after* scan-image
+      # and update-tag so we never delete a child manifest that Trivy still
+      # needs to resolve.
+      - name: Delete old package versions (keep last 15)
+        uses: actions/delete-package-versions@v5
+        with:
+          package-name: tradingtools
+          package-type: container
+          min-versions-to-keep: 15
+          delete-only-untagged-versions: false

@@ -199,7 +199,7 @@ Replays a fixed klines fixture through both the backtest engine and the live eng
 | Build workflow | `.github/workflows/build-dev.yml` | `.github/workflows/build-qa.yml` |
 | Trigger | push to `develop` (every commit) | `workflow_dispatch` (manual) **or** push of tag `v*.*.*-rc*` |
 
-- **dev pipeline**: push to `develop` → `build-dev.yml` builds multi-arch image, scans with Trivy (HIGH/CRITICAL fixable blocks promotion), updates `helm/env/dev.yaml` image tag. Argo `trading-tool` Application is sync-manual, so a human still clicks Sync in the Argo UI.
+- **dev pipeline**: push to `develop` → `build-dev.yml` builds multi-arch image, scans with Trivy (HIGH/CRITICAL fixable blocks promotion), updates `helm/env/dev.yaml` image tag, and finally runs a `cleanup-old-versions` job that prunes GHCR (keep last 15 — multi-arch creates 3 versions per push, so this retains ~5 builds). The cleanup runs **last** because Trivy resolves the manifest-list digest and pulls platform-child manifests; deleting GHCR versions before Trivy finishes can vanish those children mid-scan and break the resolution. Argo `trading-tool` Application is sync-manual, so a human still clicks Sync in the Argo UI.
 - **qa pipeline**: same shape as dev plus a `resolve-tag` job at the front that branches on event:
   - `push: tags: 'v*.*.*-rc*'` → image tag is the version itself (e.g. `v1.2.0-rc1`).
   - `workflow_dispatch` → image tag is `qa-<short_sha>`.
