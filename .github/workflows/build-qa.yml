@@ -167,13 +167,19 @@ jobs:
       KEYCLOAK_CLIENT_ID: tradingtool-api
     steps:
       - name: Wait for /healthz
+        # Cloudflare returns 403 to GitHub-runner IPs/UA today (#71). Until
+        # we add Cloudflare Access service-token headers (or a WAF skip rule)
+        # the smoke can never reach the app. Keep the timeout short (90s)
+        # so failed runs don't burn 10 min of quota each. Once #71 lands,
+        # bump back to 600 and consider promoting smoke from
+        # continue-on-error to required.
         run: |
           set -euo pipefail
-          deadline=$(( $(date +%s) + 600 ))
-          until curl -fsS "$QA_BASE_URL/healthz" > /dev/null; do
+          deadline=$(( $(date +%s) + 90 ))
+          until curl -fsS --max-time 10 "$QA_BASE_URL/healthz" > /dev/null; do
             now=$(date +%s)
             if [ "$now" -ge "$deadline" ]; then
-              echo "Timeout: $QA_BASE_URL/healthz never returned 200 within 10 min" >&2
+              echo "Timeout: $QA_BASE_URL/healthz never returned 200 within 90s (see #71)" >&2
               exit 1
             fi
             echo "Waiting for QA app to come up..."
