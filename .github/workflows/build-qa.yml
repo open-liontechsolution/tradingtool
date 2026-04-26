@@ -159,27 +159,32 @@ jobs:
       - resolve-tag
       - update-tag
     runs-on: ubuntu-latest
-    # Initial soft-gate — flips to required once the smoke is stable.
+    # Initial soft-gate — flips to required once the smoke has been green
+    # for a few weeks.
     continue-on-error: true
     env:
       QA_BASE_URL: https://tradingtool-qa.liontechsolution.com
       KEYCLOAK_REALM: tradingtool-qa
       KEYCLOAK_CLIENT_ID: tradingtool-api
+      # Cloudflare Access service-token headers — required because the QA
+      # hostname sits behind Cloudflare's bot protection. The Access
+      # Application uses two policies: Service Auth (this token) and Bypass
+      # for Everyone, so real users keep going through unchallenged. See #71
+      # for the rationale and dashboard setup.
+      CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+      CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
     steps:
       - name: Wait for /healthz
-        # Cloudflare returns 403 to GitHub-runner IPs/UA today (#71). Until
-        # we add Cloudflare Access service-token headers (or a WAF skip rule)
-        # the smoke can never reach the app. Keep the timeout short (90s)
-        # so failed runs don't burn 10 min of quota each. Once #71 lands,
-        # bump back to 600 and consider promoting smoke from
-        # continue-on-error to required.
         run: |
           set -euo pipefail
-          deadline=$(( $(date +%s) + 90 ))
-          until curl -fsS --max-time 10 "$QA_BASE_URL/healthz" > /dev/null; do
+          deadline=$(( $(date +%s) + 600 ))
+          until curl -fsS --max-time 10 \
+              -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
+              -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
+              "$QA_BASE_URL/healthz" > /dev/null; do
             now=$(date +%s)
             if [ "$now" -ge "$deadline" ]; then
-              echo "Timeout: $QA_BASE_URL/healthz never returned 200 within 90s (see #71)" >&2
+              echo "Timeout: $QA_BASE_URL/healthz never returned 200 within 10 min" >&2
               exit 1
             fi
             echo "Waiting for QA app to come up..."
@@ -189,7 +194,10 @@ jobs:
 
       - name: Verify /api/auth/config returns 200
         run: |
-          curl -fsS "$QA_BASE_URL/api/auth/config" | head -c 200
+          curl -fsS \
+            -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
+            -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
+            "$QA_BASE_URL/api/auth/config" | head -c 200
           echo ""
 
       - name: Login as service user (Direct Access Grants)
@@ -205,6 +213,9 @@ jobs:
             echo "skipped=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          # No CF-Access headers here — Keycloak lives on a different host
+          # (keycloak-dev.liontechsolution.com) outside the qa Access
+          # Application.
           token=$(curl -fsS -X POST \
             "${KEYCLOAK_URL%/}/realms/${KEYCLOAK_REALM}/protocol/openid-connect/token" \
             -d "client_id=${KEYCLOAK_CLIENT_ID}" \
@@ -229,14 +240,24 @@ jobs:
           set -euo pipefail
           payload='{"symbol":"BTCUSDT","interval":"1d","strategy":"breakout","strategy_params":{"lookback":20,"stop_pct":2.0},"initial_portfolio":1000,"leverage":1,"capital_mode":"leverage","cost_bps":10,"telegram_enabled":false,"active":false}'
           created=$(curl -fsS -X POST "$QA_BASE_URL/api/signals/configs" \
+            -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
+            -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
             -H "Authorization: Bearer $TOKEN" \
             -H "Content-Type: application/json" \
             -d "$payload")
           id=$(jq -r '.id' <<<"$created")
           echo "Created config id=$id"
-          curl -fsS -H "Authorization: Bearer $TOKEN" "$QA_BASE_URL/api/signals/configs" \
+          curl -fsS \
+            -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
+            -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
+            -H "Authorization: Bearer $TOKEN" \
+            "$QA_BASE_URL/api/signals/configs" \
             | jq -e ".[] | select(.id == $id)" > /dev/null
-          curl -fsS -X DELETE -H "Authorization: Bearer $TOKEN" "$QA_BASE_URL/api/signals/configs/$id"
+          curl -fsS -X DELETE \
+            -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
+            -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
+            -H "Authorization: Bearer $TOKEN" \
+            "$QA_BASE_URL/api/signals/configs/$id"
           echo "Round-trip OK."
 
   cleanup-old-versions:

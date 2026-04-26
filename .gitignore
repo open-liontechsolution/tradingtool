@@ -59,6 +59,16 @@ helm/secrets/*.yaml
 helm/env/secrets.yaml
 helm/env/secrets-*.yaml
 
+# Loose credential drop-files at repo root (keys.txt, cloudflare, etc).
+# Never commit these — even temporarily — because `git add -A` will pick
+# them up. If you need to share creds during a session, use
+# helm/secrets/<env>.yaml or out-of-band channels.
+/keys.txt
+/cloudflare
+/secrets.txt
+/credentials.txt
+/.env*
+
 # Claude
 .claude
 .mcp.json
