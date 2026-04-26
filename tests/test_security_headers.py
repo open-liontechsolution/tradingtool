@@ -81,3 +81,48 @@ def test_existing_header_is_not_overwritten():
     assert resp.headers["X-Frame-Options"] == "SAMEORIGIN"
     # The other defaults still apply.
     assert resp.headers["X-Content-Type-Options"] == "nosniff"
+
+
+# ---------------------------------------------------------------------------
+# CSP — pure function tests for _build_csp
+# ---------------------------------------------------------------------------
+
+
+def test_build_csp_returns_none_when_keycloak_url_empty():
+    from backend.app import _build_csp
+
+    assert _build_csp("") is None
+
+
+def test_build_csp_includes_keycloak_url_in_connect_and_frame():
+    from backend.app import _build_csp
+
+    csp = _build_csp("https://keycloak.example.com")
+    assert csp is not None
+    assert "connect-src 'self' https://keycloak.example.com" in csp
+    assert "frame-src https://keycloak.example.com" in csp
+
+
+def test_build_csp_keeps_report_uri_pointing_at_app_endpoint():
+    from backend.app import _build_csp
+
+    csp = _build_csp("https://keycloak.example.com")
+    assert "report-uri /api/csp-report" in csp
+
+
+def test_build_csp_blocks_third_party_default_sources():
+    from backend.app import _build_csp
+
+    csp = _build_csp("https://keycloak.example.com")
+    assert "default-src 'self'" in csp
+    assert "frame-ancestors 'none'" in csp
+    assert "base-uri 'self'" in csp
+    assert "form-action 'self'" in csp
+
+
+def test_build_csp_allows_google_fonts():
+    from backend.app import _build_csp
+
+    csp = _build_csp("https://keycloak.example.com")
+    assert "https://fonts.googleapis.com" in csp
+    assert "https://fonts.gstatic.com" in csp
