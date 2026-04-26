@@ -49,8 +49,11 @@ Thumbs.db
 # Alembic generated (keep versions/ tracked, ignore auto-generated cache)
 alembic/__pycache__/
 
-# helm
+# helm — secret manifests live outside the repo. Pattern covers
+# the dev fallback (`secrets.yaml`) plus per-env variants like
+# `secrets-qa.yaml`, `secrets-prod.yaml`, etc.
 helm/env/secrets.yaml
+helm/env/secrets-*.yaml
 
 # Claude
 .claude
