@@ -88,15 +88,53 @@ app.add_middleware(
 )
 
 
+def _build_csp(keycloak_url: str) -> str | None:
+    """Build the Content-Security-Policy string for a given Keycloak URL.
+
+    Returns ``None`` when ``keycloak_url`` is empty — that's the local-dev
+    path with ``AUTH_ENABLED=false`` where a CSP referencing an empty
+    hostname would be invalid. In that mode there is no auth iframe to
+    allow anyway, so the other security headers are enough.
+
+    Notes on the chosen sources:
+
+    * ``style-src 'unsafe-inline'`` is regrettable but Recharts /
+      lightweight-charts both inject inline styles. Can be tightened
+      after migrating those to nonces.
+    * ``connect-src`` and ``frame-src`` allow the Keycloak host so that
+      ``oidc-client-ts`` can fetch the token endpoint, JWKS, and run
+      the silent-renew iframe.
+    * Stays in Report-Only mode initially so we can observe violations
+      via ``/api/csp-report`` without breaking the SPA. Promote to
+      enforcement (``Content-Security-Policy``) once the report log is
+      quiet for a few days.
+    """
+    if not keycloak_url:
+        return None
+    return (
+        "default-src 'self'; "
+        "script-src 'self'; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "font-src 'self' https://fonts.gstatic.com; "
+        "img-src 'self' data:; "
+        f"connect-src 'self' {keycloak_url}; "
+        f"frame-src {keycloak_url}; "
+        "frame-ancestors 'none'; "
+        "base-uri 'self'; "
+        "form-action 'self'; "
+        "report-uri /api/csp-report"
+    )
+
+
+_CSP_REPORT_ONLY = _build_csp(KEYCLOAK_URL)
+
+
 @app.middleware("http")
 async def security_headers(request: Request, call_next):
     """Attach baseline security headers to every response.
 
-    CSP is intentionally NOT included here yet — it needs end-to-end
-    validation in QA against the OIDC/silent-renew iframe and the
-    Google Fonts loaded by index.css before we enforce. Tracked
-    separately. The four headers below are safe-by-construction
-    (no allowlist tuning needed) and add immediate value.
+    CSP runs in Report-Only mode for now — see ``_build_csp`` for the
+    rationale and the rollout plan to switch to enforcement.
     """
     response = await call_next(request)
     response.headers.setdefault("X-Frame-Options", "DENY")
@@ -107,7 +145,26 @@ async def security_headers(request: Request, call_next):
         "Strict-Transport-Security",
         "max-age=31536000; includeSubDomains",
     )
+    if _CSP_REPORT_ONLY is not None:
+        response.headers.setdefault("Content-Security-Policy-Report-Only", _CSP_REPORT_ONLY)
     return response
+
+
+@app.post("/api/csp-report", tags=["security"])
+async def csp_report(request: Request) -> Response:
+    """Receive CSP violation reports from browsers (Report-Only mode).
+
+    Browsers POST one report per blocked resource with
+    ``Content-Type: application/csp-report``. We log a truncated body
+    so the report shows up in pod logs (``kubectl logs ...``) without
+    spamming downstream sinks. Once the policy is stable and we flip
+    to enforcement, this endpoint can either be removed or kept as a
+    failure beacon.
+    """
+    body = await request.body()
+    snippet = body.decode("utf-8", errors="replace")[:1000]
+    logger.warning("CSP violation report: %s", snippet)
+    return Response(status_code=204)
 
 
 @app.exception_handler(RequestValidationError)
