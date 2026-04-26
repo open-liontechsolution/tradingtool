@@ -230,8 +230,9 @@ Cubren:
 ## Despliegue
 
 - Imagen multi-stage (`Dockerfile`): Node 22 Alpine construye el frontend, Python 3.13-slim corre la app.
-- CD: push a `develop` → GitHub Actions publica imagen multi-arch en GHCR y actualiza `helm/env/dev.yaml` con el tag. Argo CD aplica el cambio al cluster k3s de dev.
-- Chart de Helm en `helm/`; valores sensibles viven en un `Secret` externo referenciado por `existingSecret`.
+- CD: push a `develop` → GitHub Actions publica imagen multi-arch en GHCR, escanea con **Trivy** (HIGH/CRITICAL fixables bloquean) y solo si el scan pasa actualiza `helm/env/dev.yaml` con el tag. Argo CD aplica el cambio al cluster k3s de dev.
+- Chart de Helm en `helm/`; valores sensibles viven en un `Secret` externo referenciado por `existingSecret`. El template está en `helm/env/secrets.example.yaml` — copia a `helm/env/secrets.yaml` (gitignored), rellena con `printf '%s' '<value>' | base64 -w 0`, y aplícalo manualmente con `kubectl apply -f`.
+- CI adicional: **Dependabot** semanal (pip, npm, github-actions, docker) y **gitleaks** en cada PR/push como red de seguridad contra leaks accidentales.
 
 ## Estructura rápida
 
