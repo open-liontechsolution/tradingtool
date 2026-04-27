@@ -157,14 +157,23 @@ jobs:
     permissions:
       packages: write
     steps:
-      # Multi-arch images create 1 manifest list + 2 platform children per push.
-      # Keeping 15 versions retains ~5 multi-arch builds. Runs *after* scan-image
-      # and update-tag so we never delete a child manifest that Trivy still
-      # needs to resolve (#63: previous setup borraba children mid-pipeline).
-      - name: Delete old package versions (keep last 15)
+      # Multi-arch images create 1 manifest list + 2 platform children per
+      # push. Keeping 90 versions retains ~30 multi-arch builds (≈3 days at
+      # ~10 builds/day). Runs *after* scan-image, generate-sbom and
+      # update-tag so we never delete a child manifest that Trivy/SBOM
+      # still needs to resolve (#63).
+      #
+      # KNOWN FRAGILITY: `actions/delete-package-versions@v5` is not
+      # manifest-list-aware. It treats each platform child as an independent
+      # version sorted by created_at, so an aggressive trim can delete the
+      # arm64 (or amd64) child of a still-needed manifest list and leave it
+      # un-pullable. We hit this with `min-versions-to-keep: 15` after a
+      # heavy day of merges (incident: #103). 90 buys margin; a proper
+      # manifest-list-aware cleanup is a follow-up.
+      - name: Delete old package versions (keep last 90)
         uses: actions/delete-package-versions@v5
         with:
           package-name: tradingtools
           package-type: container
-          min-versions-to-keep: 15
+          min-versions-to-keep: 90
           delete-only-untagged-versions: false
