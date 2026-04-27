@@ -161,7 +161,11 @@ Frontend-only (placed in `frontend/.env.development.local`, only needed to overr
 
 Replays a fixed klines fixture through both the backtest engine and the live engine (`signal_engine.scan_config` + `live_tracker._fill_pending_entries` + `_check_candle_close_exits`) and asserts trade-log equivalence — same entries, same exits, same exit reasons, same prices.
 
-- **Marker `slow`**: parity tests run under `@pytest.mark.slow` and are excluded from the default `pytest -q` (configured in `pyproject.toml`). Run them with `pytest -m slow tests/integration/test_parity.py`. CI has a dedicated non-blocking `test-parity` job.
+- **Marker `slow`**: parity tests run under `@pytest.mark.slow` and are excluded from the default `pytest -q` (configured in `pyproject.toml`). Run them with `pytest -m slow tests/integration/test_parity.py`.
+- **Cadence in CI** (post-#69):
+  - **PR-time** (`.github/workflows/ci.yml`, `test-parity` job): runs the slot_a sample only (`PARITY_SLOTS=slot_a`). Non-blocking, ~30-40s. Keeps the per-PR Actions quota sane.
+  - **Nightly** (`.github/workflows/parity-nightly.yml`): full matrix on `develop` at 03:00 UTC, plus `workflow_dispatch` for manual runs. `PARITY_SLOTS` unset → all 4 slots enabled.
+  - The `PARITY_SLOTS` env var is parsed by `_enabled_slots()` in `test_parity.py`: comma-separated, empty/unset means all slots. Tests targeting a slot that isn't enabled call `pytest.skip(...)` so the test names still appear in the report.
 - **Slot fixtures** live in `tests/fixtures/parity/<slot>.json.gz`:
   - **slot_a** — BTCUSDT 4h, 2023-2024 (~4400 candles, ~140 KiB gzipped). Base slot.
   - **slot_b** — BTCUSDT 1h, 2024 Q1 (~2200 candles, ~70 KiB). High-density, exercises trailing `move_stop`.

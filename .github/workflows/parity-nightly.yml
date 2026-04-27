@@ -1,0 +1,35 @@
+name: Parity nightly
+
+# Runs the full parity harness (slots a-d × all strategies, plus the leveraged
+# liquidation matrix on slot_d) every night against develop. PR-time CI runs
+# only the slot_a sample (.github/workflows/ci.yml) to keep the quota sane;
+# this workflow is the safety net that catches regressions across the rest of
+# the matrix. See #69 for the rationale.
+
+on:
+  schedule:
+    # 03:00 UTC every day. Off-peak for the GitHub Actions queue and well
+    # after typical merge activity, so it always runs against the latest
+    # develop tip from the previous day's work.
+    - cron: "0 3 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  test-parity-full:
+    name: Parity harness (full matrix)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: develop
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Run full parity matrix
+        # PARITY_SLOTS unset → all slots enabled (default in test_parity.py).
+        run: pytest -m slow tests/integration/test_parity.py -v --tb=short

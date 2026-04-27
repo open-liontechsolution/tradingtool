@@ -360,6 +360,21 @@ _SLOTS = ["slot_a", "slot_b", "slot_c", "slot_d"]
 _STRATEGIES = list(_STRATEGY_PARAMS.keys())
 
 
+def _enabled_slots() -> set[str]:
+    """Parse the ``PARITY_SLOTS`` env var (comma-separated). Empty/unset → all slots.
+
+    CI PR-time sets ``PARITY_SLOTS=slot_a`` to keep the harness under a minute;
+    the nightly cron workflow leaves it unset so the full matrix runs.
+    """
+    raw = os.environ.get("PARITY_SLOTS", "").strip()
+    if not raw:
+        return set(_SLOTS)
+    return {s.strip() for s in raw.split(",") if s.strip()}
+
+
+_ENABLED_SLOTS = _enabled_slots()
+
+
 async def _run_parity_case(
     slot_name: str,
     strategy_name: str,
@@ -425,6 +440,8 @@ async def _run_parity_case(
 @pytest.mark.parametrize("strategy_name", _STRATEGIES)
 async def test_parity_slot_strategy(slot_name: str, strategy_name: str) -> None:
     """Replays slot × strategy through both engines and asserts trade-log parity (unleveraged)."""
+    if slot_name not in _ENABLED_SLOTS:
+        pytest.skip(f"slot {slot_name} disabled by PARITY_SLOTS env var")
     fixture_path = FIXTURE_DIR / f"{slot_name}.json.gz"
     if not fixture_path.exists():
         pytest.skip(f"fixture {fixture_path.name} not present — regenerate with the matching seeder script")
@@ -448,6 +465,8 @@ async def test_parity_open_next_slot_strategy(slot_name: str, strategy_name: str
     ``test_parity_leveraged_slot_d`` in close_current; combining open_next
     + leverage is well-covered by composition.
     """
+    if slot_name not in _ENABLED_SLOTS:
+        pytest.skip(f"slot {slot_name} disabled by PARITY_SLOTS env var")
     fixture_path = FIXTURE_DIR / f"{slot_name}.json.gz"
     if not fixture_path.exists():
         pytest.skip(f"fixture {fixture_path.name} not present — regenerate with the matching seeder script")
@@ -468,6 +487,8 @@ async def test_parity_leveraged_slot_d(strategy_name: str) -> None:
     2. Stop opening new trades from that point onward (live: status='blown';
        backtest: local ``blown`` flag).
     """
+    if "slot_d" not in _ENABLED_SLOTS:
+        pytest.skip("slot_d disabled by PARITY_SLOTS env var")
     fixture_path = FIXTURE_DIR / "slot_d.json.gz"
     if not fixture_path.exists():
         pytest.skip("slot_d.json.gz not present — run python -m tests.fixtures.parity._seed_slot_d")
