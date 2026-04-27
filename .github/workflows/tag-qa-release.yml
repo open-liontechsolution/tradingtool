@@ -30,14 +30,30 @@ jobs:
   tag:
     name: Compute and push next QA tag
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
+      # Push the tag with the GitHub App token, NOT the default GITHUB_TOKEN.
+      # GitHub deliberately does not fire downstream workflows on pushes
+      # authored by GITHUB_TOKEN (loop prevention), so `git push origin
+      # <tag>` from the default token creates the tag silently and
+      # `build-qa.yml::on.push.tags` never fires — exactly the bug we hit
+      # on the first run after #85 (v0.1.0-rc2 created, build-qa didn't
+      # pick it up). Same App token already used by `build-dev.yml::update-tag`
+      # and `build-qa.yml::update-tag` for the same reason.
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.TT_APP_ID }}
+          private-key: ${{ secrets.TT_APP_PRIVATE_KEY }}
+
       - uses: actions/checkout@v6
         with:
           # `git tag --list` only sees tags fetched into this checkout.
           # Without full history we'd miss older tags and miscompute the bump.
           fetch-depth: 0
+          # Configure git credentials with the App token so subsequent
+          # `git push origin <tag>` is authored by the App, not GITHUB_TOKEN.
+          token: ${{ steps.app-token.outputs.token }}
 
       - name: Compute next version
         id: bump
