@@ -7,7 +7,7 @@ SlowAPI middleware on a minimal app, and exercises 200 → 200 → 429.
 
 from __future__ import annotations
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -103,3 +103,36 @@ def test_client_key_returns_unknown_when_no_source():
 def test_client_key_strips_whitespace_in_xff():
     req = _FakeRequest(headers={"x-forwarded-for": "   203.0.113.3   "})
     assert client_key(req) == "203.0.113.3"
+
+
+# ---------------------------------------------------------------------------
+# Per-route limit stacks over the application-wide cap (post-#83)
+# ---------------------------------------------------------------------------
+
+
+def test_per_route_limit_overrides_global_cap():
+    """A per-route ``@limiter.limit("2/minute")`` decorator caps that route
+    specifically even when the global ``application_limits`` is much higher.
+    Locks in the slowapi semantics that #83 relies on for the creation
+    endpoints (POST /signals/configs at 10/minute, etc.)."""
+    limiter = Limiter(
+        key_func=client_key,
+        application_limits=["60/minute"],
+        enabled=True,
+    )
+    app = FastAPI()
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+    app.add_middleware(SlowAPIMiddleware)
+
+    @app.post("/create")
+    @limiter.limit("2/minute")
+    async def create(request: Request):
+        return {"ok": True}
+
+    client = TestClient(app)
+    r = client.post("/create")
+    assert r.status_code == 200, r.text
+    assert client.post("/create").status_code == 200
+    resp = client.post("/create")
+    assert resp.status_code == 429

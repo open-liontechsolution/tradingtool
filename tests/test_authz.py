@@ -29,9 +29,20 @@ def _use_temp_db(tmp_path):
     db_path = str(tmp_path / "test_authz.db")
     os.environ["DB_PATH"] = db_path
     import backend.database as dbmod
+    from backend.rate_limit import limiter
 
     dbmod.DB_PATH = Path(db_path)
-    yield
+    # Disable rate limiting for the duration of the test. The per-route caps
+    # added in #83 (e.g. POST /signals/configs at 10/minute) are keyed by
+    # client IP — TestClient defaults to a single host ("testclient") so the
+    # bucket fills across tests. Restore on teardown so other test modules
+    # see the production-default state.
+    prev_enabled = limiter.enabled
+    limiter.enabled = False
+    try:
+        yield
+    finally:
+        limiter.enabled = prev_enabled
 
 
 def _now_iso() -> str:

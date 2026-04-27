@@ -15,11 +15,12 @@ from __future__ import annotations
 import secrets
 from datetime import UTC, datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from backend.auth import AuthUser, get_current_user
 from backend.config import TELEGRAM_BOT_USERNAME, TELEGRAM_ENABLED
 from backend.database import get_db
+from backend.rate_limit import limiter
 
 router = APIRouter(tags=["profile"])
 
@@ -54,7 +55,11 @@ async def get_telegram_status(user: AuthUser = Depends(get_current_user)) -> dic
 
 
 @router.post("/profile/telegram/link-token")
-async def create_link_token(user: AuthUser = Depends(get_current_user)) -> dict:
+@limiter.limit("5/minute")
+async def create_link_token(
+    request: Request,
+    user: AuthUser = Depends(get_current_user),
+) -> dict:
     """Generate a one-time token the user can send to the bot as ``/start <token>``."""
     if not TELEGRAM_ENABLED:
         raise HTTPException(
