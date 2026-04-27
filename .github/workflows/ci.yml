@@ -65,12 +65,14 @@ jobs:
         run: pytest tests/ -v --tb=short
 
   test-parity:
-    name: Parity harness (slow)
+    name: Parity harness (sample, slot_a)
     runs-on: ubuntu-latest
-    # Non-blocking: replays committed slot fixtures through both engines and
-    # asserts trade-log parity. ~2-3 minutes. We don't want a parity
-    # divergence to block unrelated PRs while the harness stabilises; promote
-    # to required once it's been green for a few weeks.
+    # Non-blocking: replays slot_a only through both engines and asserts
+    # trade-log parity. The full matrix (slots a-d × all strategies, plus
+    # leveraged liquidation on slot_d) runs in the nightly workflow
+    # (.github/workflows/parity-nightly.yml). PARITY_SLOTS=slot_a keeps the
+    # PR-time job under a minute so the CI quota stays sane (#69). Promote
+    # to required once the sample has been green for a few weeks.
     continue-on-error: true
     steps:
       - uses: actions/checkout@v6
@@ -82,7 +84,9 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements-dev.txt
 
-      - name: Run slow parity tests
+      - name: Run slow parity tests (slot_a sample)
+        env:
+          PARITY_SLOTS: slot_a
         run: pytest -m slow tests/integration/test_parity.py -v --tb=short
 
   build-frontend:
