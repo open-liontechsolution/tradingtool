@@ -13,6 +13,15 @@ on his create. The replacement ``idx_signal_configs_user_unique`` adds
 
 See #63 Sprint 2 cross-user authz tests for the regression that
 exposed this.
+
+Note on the DROP CONSTRAINT in upgrade(): the legacy index was created
+with ``unique=True``, which on Postgres also auto-creates a CONSTRAINT
+of the same name. ``DROP INDEX`` then fails with
+``DependentObjectsStillExistError`` because the constraint depends on
+the index. ``DROP CONSTRAINT`` removes both atomically. SQLite never
+hits this code path — its inline migration in ``backend/database.py``
+``init_db()`` uses ``DROP INDEX IF EXISTS``, which is correct because
+SQLite has no constraint object separate from the index.
 """
 
 from __future__ import annotations
@@ -28,7 +37,9 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.drop_index("idx_signal_configs_unique", table_name="signal_configs", if_exists=True)
+    op.execute(
+        "ALTER TABLE signal_configs DROP CONSTRAINT IF EXISTS idx_signal_configs_unique"
+    )
     op.create_index(
         "idx_signal_configs_user_unique",
         "signal_configs",
@@ -38,7 +49,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index("idx_signal_configs_user_unique", table_name="signal_configs", if_exists=True)
+    op.drop_index(
+        "idx_signal_configs_user_unique", table_name="signal_configs", if_exists=True
+    )
     op.create_index(
         "idx_signal_configs_unique",
         "signal_configs",
