@@ -1,0 +1,95 @@
+name: Tag QA release candidate
+
+# One-click QA release-tag bump. Reads the latest `vX.Y.Z-rcN` tag, applies
+# the requested bump, pushes the new tag — and `build-qa.yml` picks it up
+# from `on.push.tags: 'v*.*.*-rc*'` without any extra wiring.
+#
+# Bump semantics:
+#   major   v1.2.3-rc4  →  v2.0.0-rc1   breaking changes / redesign
+#   minor   v1.2.3-rc4  →  v1.3.0-rc1   new feature, backwards-compatible
+#   patch   v1.2.3-rc4  →  v1.2.4-rc1   bug fix on a version already in prod
+#   hotfix  v1.2.3-rc4  →  v1.2.3-rc5   iterate within the current QA cycle
+#
+# See #85 for the full design and rationale.
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Bump type"
+        required: true
+        type: choice
+        options:
+          - hotfix
+          - patch
+          - minor
+          - major
+        default: hotfix
+
+jobs:
+  tag:
+    name: Compute and push next QA tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # `git tag --list` only sees tags fetched into this checkout.
+          # Without full history we'd miss older tags and miscompute the bump.
+          fetch-depth: 0
+
+      - name: Compute next version
+        id: bump
+        env:
+          BUMP: ${{ inputs.bump }}
+        run: |
+          set -euo pipefail
+          last=$(git tag --list 'v*.*.*-rc*' --sort=-v:refname | head -1)
+          if [ -z "$last" ]; then
+            echo "No previous QA tag found — bootstrapping at v0.1.0-rc1"
+            echo "next=v0.1.0-rc1" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! [[ $last =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)-rc([0-9]+)$ ]]; then
+            echo "Latest tag '$last' does not match vX.Y.Z-rcN — refusing to guess" >&2
+            exit 1
+          fi
+          M=${BASH_REMATCH[1]}
+          m=${BASH_REMATCH[2]}
+          p=${BASH_REMATCH[3]}
+          rc=${BASH_REMATCH[4]}
+          case "$BUMP" in
+            major)  next="v$((M+1)).0.0-rc1" ;;
+            minor)  next="v${M}.$((m+1)).0-rc1" ;;
+            patch)  next="v${M}.${m}.$((p+1))-rc1" ;;
+            hotfix) next="v${M}.${m}.${p}-rc$((rc+1))" ;;
+            *) echo "Unknown bump '$BUMP'" >&2; exit 1 ;;
+          esac
+          echo "Latest: $last  →  Next ($BUMP): $next"
+          echo "next=$next" >> "$GITHUB_OUTPUT"
+
+      - name: Create and push tag
+        env:
+          NEXT: ${{ steps.bump.outputs.next }}
+          BUMP: ${{ inputs.bump }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          msg="QA release candidate $NEXT ($BUMP bump from previous tag)"
+          git tag -a "$NEXT" -m "$msg"
+          git push origin "$NEXT"
+
+      - name: Summarise on the run page
+        env:
+          NEXT: ${{ steps.bump.outputs.next }}
+          BUMP: ${{ inputs.bump }}
+        run: |
+          {
+            echo "## QA tag pushed"
+            echo ""
+            echo "- New tag: \`$NEXT\`"
+            echo "- Bump: \`$BUMP\`"
+            echo "- Build pipeline: \`build-qa.yml\` will fire on this push event."
+          } >> "$GITHUB_STEP_SUMMARY"
