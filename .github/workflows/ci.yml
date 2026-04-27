@@ -1,13 +1,16 @@
 name: CI
 
+# `paths-ignore` deliberately empty: the `develop-merge-protection` ruleset
+# requires Lint backend / Lint frontend / Test backend / Build frontend,
+# and any path filter here risks a catch-22 where a PR touches only
+# ignored paths → CI skips → required checks never report → mergeStateStatus
+# = BLOCKED. The auto-bot tag bumps to helm/env/{dev,qa}.yaml don't go
+# through PRs anyway (they push directly to develop), so PR-time filtering
+# never helped them.
 on:
   pull_request:
     branches:
       - develop
-    paths-ignore:
-      # Auto-bot commits to helm/env/{dev,qa}.yaml only flip the image tag
-      # — no need to re-run lint/tests for those.
-      - "helm/env/**"
 
 jobs:
   lint-backend:
