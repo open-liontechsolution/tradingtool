@@ -69,9 +69,15 @@ helm/env/secrets-*.yaml
 /credentials.txt
 /.env*
 
-# Claude
-.claude
+# Claude — only commit project-scoped skills, never per-user settings.
+.claude/*
+!.claude/skills/
+!.claude/skills/**
 .mcp.json
+
+# QA walkthrough screenshots — heavy, regenerable, kept local.
+# The markdown reports themselves ARE committed for historical record.
+qa-walkthrough-reports/screenshots/
 
 # Playwright CLI local session artifacts
 .playwright/
