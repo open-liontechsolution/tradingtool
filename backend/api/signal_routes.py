@@ -130,7 +130,12 @@ async def create_signal_config(
             await db.commit()
             config_id = cursor.lastrowid
         except Exception as exc:
-            if "UNIQUE" in str(exc):
+            # SQLite raises `IntegrityError: UNIQUE constraint failed: ...`
+            # (uppercase). asyncpg raises `UniqueViolationError` whose
+            # str() is `duplicate key value violates unique constraint
+            # "..."` (lowercase). Match case-insensitively so both
+            # backends end up at the same 409.
+            if "unique" in str(exc).lower():
                 raise HTTPException(
                     409,
                     "A config with the same symbol/interval/strategy/params already exists",

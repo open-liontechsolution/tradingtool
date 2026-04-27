@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -409,3 +410,88 @@ def test_same_strategy_params_dont_collide_across_users():
     b_ids = [c["id"] for c in bob_client.get("/api/signals/configs").json()["configs"]]
     assert config_a in a_ids and config_a not in b_ids
     assert config_b in b_ids and config_b not in a_ids
+
+
+# ---------------------------------------------------------------------------
+# Duplicate-config error mapping (post-#111 follow-up)
+# ---------------------------------------------------------------------------
+
+
+def test_same_user_duplicate_payload_returns_409_sqlite():
+    """SQLite path: a user creating the same symbol/interval/strategy/params
+    twice should hit the per-user unique index and get a clean 409, not a
+    raw 500 from the DB layer. SQLite's IntegrityError says
+    'UNIQUE constraint failed' (uppercase)."""
+    alice, _ = asyncio.run(_init_schema_and_users())
+
+    client = TestClient(_build_app(alice))
+    payload = {
+        "symbol": "BTCUSDT",
+        "interval": "1d",
+        "strategy": "breakout",
+        "params": {"lookback": 20, "stop_pct": 2.0},
+        "initial_portfolio": 1000,
+        "leverage": 1,
+        "cost_bps": 0,
+    }
+    first = client.post("/api/signals/configs", json=payload)
+    assert first.status_code == 200, first.text
+
+    second = client.post("/api/signals/configs", json=payload)
+    assert second.status_code == 409, second.text
+    assert "already exists" in second.json()["detail"].lower()
+
+
+def test_same_user_duplicate_payload_returns_409_postgres_style(monkeypatch):
+    """Postgres path: asyncpg raises UniqueViolationError whose str() is
+    `duplicate key value violates unique constraint "..."` — note the
+    LOWERCASE 'unique'. The original handler did `if "UNIQUE" in str(exc)`
+    (case-sensitive) so on Postgres a duplicate slipped through and
+    surfaced as 500. Simulate the asyncpg-style exception string and
+    assert the handler still returns 409."""
+    alice, _ = asyncio.run(_init_schema_and_users())
+
+    client = TestClient(_build_app(alice))
+    # First insert succeeds normally.
+    payload = {
+        "symbol": "ETHUSDT",
+        "interval": "4h",
+        "strategy": "breakout",
+        "params": {"lookback": 30},
+        "initial_portfolio": 1000,
+        "leverage": 1,
+        "cost_bps": 0,
+    }
+    first = client.post("/api/signals/configs", json=payload)
+    assert first.status_code == 200, first.text
+
+    # Second insert: monkey-patch the db connection's execute to raise an
+    # asyncpg-style UniqueViolationError-shaped exception (without depending
+    # on asyncpg being installed in the test env).
+    import backend.api.signal_routes as routes_module  # noqa: PLC0415
+
+    original_get_db = routes_module.get_db
+
+    class _PgStyleError(Exception):
+        pass
+
+    @asynccontextmanager
+    async def _failing_get_db():
+        async with original_get_db() as db:
+            real_execute = db.execute
+
+            async def _raising_execute(query: str, params=()):
+                if "INSERT INTO signal_configs" in query:
+                    raise _PgStyleError(
+                        'duplicate key value violates unique constraint "idx_signal_configs_user_unique"'
+                    )
+                return await real_execute(query, params)
+
+            db.execute = _raising_execute  # type: ignore[method-assign]
+            yield db
+
+    monkeypatch.setattr(routes_module, "get_db", _failing_get_db)
+
+    second = client.post("/api/signals/configs", json=payload)
+    assert second.status_code == 409, second.text
+    assert "already exists" in second.json()["detail"].lower()
