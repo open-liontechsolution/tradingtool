@@ -349,9 +349,21 @@ jobs:
         if: steps.login.outputs.skipped == 'false'
         env:
           TOKEN: ${{ steps.login.outputs.token }}
+          RUN_ID: ${{ github.run_id }}
         run: |
           set -euo pipefail
-          payload='{"symbol":"BTCUSDT","interval":"1d","strategy":"breakout","strategy_params":{"lookback":20,"stop_pct":2.0},"initial_portfolio":1000,"leverage":1,"capital_mode":"leverage","cost_bps":10,"telegram_enabled":false,"active":false}'
+          # Each smoke run uses a unique `params.smoke_run_id` so the
+          # (user_id, symbol, interval, strategy, params) unique index
+          # never collides with an orphan from a previous failed run
+          # (the index was added in #74; rc7 left an orphan when the jq
+          # filter bug killed the DELETE step before cleanup, then rc8
+          # 500'd here on the duplicate). Field name is `params` (not
+          # `strategy_params`) so the value is actually persisted by the
+          # SignalConfigCreate Pydantic model — the previous payload
+          # silently dropped the strategy params and stored `params={}`.
+          payload=$(jq -nc \
+            --arg run_id "$RUN_ID" \
+            '{symbol:"BTCUSDT",interval:"1d",strategy:"breakout",params:{lookback:20,stop_pct:2.0,smoke_run_id:$run_id},initial_portfolio:1000,leverage:1,cost_bps:10,telegram_enabled:false}')
           created=$(curl -fsS -X POST "$QA_BASE_URL/api/signals/configs" \
             -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
             -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
@@ -359,7 +371,7 @@ jobs:
             -H "Content-Type: application/json" \
             -d "$payload")
           id=$(jq -r '.id' <<<"$created")
-          echo "Created config id=$id"
+          echo "Created config id=$id (smoke_run_id=$RUN_ID)"
           # GET /api/signals/configs returns {"configs": [...]}, not a bare
           # array. The previous filter `.[] | select(.id == $id)` iterated
           # the wrapping object's keys and tried `.id` on the inner array,
