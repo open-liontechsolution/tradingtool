@@ -39,6 +39,21 @@ resources:
     cpu: 500m
     memory: 512Mi
 
+# Schedule app pods only on worker nodes by default. k3s does not taint
+# control-plane nodes, so without this hint the scheduler is happy to
+# place app pods on master1, where they compete with control-plane
+# components for CPU/RAM. All workers in the cluster have the
+# `node-role.kubernetes.io/worker=true` label. Override per-env (e.g.
+# `nodeSelector: {}`) if you ever need to run on master for debugging.
+# See #87.
+nodeSelector:
+  node-role.kubernetes.io/worker: "true"
+
+# Hooks reserved for per-env overrides — kept empty so an override can
+# add the block cleanly without re-declaring nodeSelector context.
+affinity: {}
+tolerations: []
+
 # Pod-level security context applied to every container. Per-container
 # overrides live below in `securityContext` (app) and
 # `cloudflareTunnel.securityContext` (sidecar). See #78.
