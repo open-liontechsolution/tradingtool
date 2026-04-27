@@ -54,7 +54,7 @@ DATABASE_URL=postgresql://... alembic upgrade head
 | `app.py` | FastAPI factory: registers routers, CORS, static file mount, starts two background asyncio loops at lifespan |
 | `config.py` | Reads all env vars once at import; single source of truth for configuration |
 | `auth.py` | Keycloak JWT validation via JWKS. `AUTH_ENABLED=false` bypasses auth with a hard-coded admin user |
-| `database.py` | Unified `get_db()` async context manager. SQLite via `aiosqlite` (dev), PostgreSQL via `asyncpg` (prod). SQLite schema is created inline by `init_db()`; PostgreSQL runs `alembic upgrade head` automatically at startup |
+| `database.py` | Unified `get_db()` async context manager. SQLite via `aiosqlite` (dev), PostgreSQL via `asyncpg` (prod). SQLite schema is created inline by `init_db()`; PostgreSQL runs `alembic upgrade head` automatically at startup. Postgres traffic goes through a shared asyncpg pool (`init_pg_pool` / `close_pg_pool`, hooked into the FastAPI lifespan); pool size is tunable via `PG_POOL_MIN_SIZE` / `PG_POOL_MAX_SIZE` / `PG_POOL_MAX_INACTIVE_LIFETIME` (see `init_pg_pool` docstring) |
 | `binance_client.py` | Async `httpx` Binance Spot API client with 429/418 rate-limit handling and exponential backoff. Singleton instance |
 | `download_engine.py` | Downloads klines in batches with upsert; tracks job progress in `download_jobs` table; `ensure_candles()` auto-fetches missing history |
 | `metrics_engine.py` | Loads klines as pandas DataFrame, computes technical indicators (SMA, EMA, ATR, Donchian, etc.), saves to `derived_metrics` |
@@ -130,6 +130,9 @@ Outbound alerts flow through a single entry point — `notifications.notify_even
 |---|---|---|
 | `DATABASE_URL` | unset | Full PostgreSQL URL; if unset, SQLite is used |
 | `DB_PATH` | `data/trading_tools.db` | SQLite path (ignored when `DATABASE_URL` is set) |
+| `PG_POOL_MIN_SIZE` | `2` | Minimum idle connections in the asyncpg pool |
+| `PG_POOL_MAX_SIZE` | `20` | Maximum connections in the asyncpg pool (per replica) |
+| `PG_POOL_MAX_INACTIVE_LIFETIME` | `300` | Seconds before an idle connection is recycled |
 | `AUTH_ENABLED` | `false` | Set `true` to enable Keycloak JWT validation |
 | `KEYCLOAK_URL` | `""` | Keycloak base URL |
 | `KEYCLOAK_REALM` | `tradingtool-dev` | Keycloak realm |

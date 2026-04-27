@@ -35,7 +35,7 @@ from backend.config import (
     TELEGRAM_ENABLED,
     TELEGRAM_WEBHOOK_URL,
 )
-from backend.database import get_db, init_db
+from backend.database import close_pg_pool, get_db, init_db, init_pg_pool
 from backend.live_tracker import run_live_tracker
 from backend.rate_limit import limiter
 from backend.signal_engine import run_signal_scanner
@@ -47,7 +47,11 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Database backend: %s", "PostgreSQL" if IS_POSTGRES else "SQLite (ephemeral)")
+    # init_db() runs alembic migrations (Postgres) on a one-shot connection,
+    # so it must complete before the pool is created — otherwise alembic
+    # would race the pool's first acquire on a partially migrated schema.
     await init_db()
+    await init_pg_pool()
 
     if TELEGRAM_ENABLED and TELEGRAM_WEBHOOK_URL:
         logger.info("Registering Telegram webhook at %s", TELEGRAM_WEBHOOK_URL)
@@ -64,6 +68,7 @@ async def lifespan(app: FastAPI):
         await scanner_task
     with contextlib.suppress(asyncio.CancelledError):
         await tracker_task
+    await close_pg_pool()
 
 
 app = FastAPI(
