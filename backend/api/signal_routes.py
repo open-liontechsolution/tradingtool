@@ -6,11 +6,12 @@ import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from backend.auth import AuthUser, get_current_user
 from backend.database import get_db
+from backend.rate_limit import limiter
 
 router = APIRouter(tags=["signals"])
 
@@ -76,7 +77,9 @@ class RealTradePatch(BaseModel):
 
 
 @router.post("/signals/configs")
+@limiter.limit("10/minute")
 async def create_signal_config(
+    request: Request,
     req: SignalConfigCreate,
     user: AuthUser = Depends(get_current_user),
 ) -> dict:
@@ -223,7 +226,9 @@ async def patch_signal_config(
 
 
 @router.post("/signals/configs/{config_id}/reset-equity")
+@limiter.limit("10/minute")
 async def reset_signal_config_equity(
+    request: Request,
     config_id: int,
     user: AuthUser = Depends(get_current_user),
 ) -> dict:
@@ -484,7 +489,9 @@ async def list_sim_trade_stop_moves(
 
 
 @router.post("/sim-trades/{trade_id}/close")
+@limiter.limit("30/minute")
 async def close_sim_trade(
+    request: Request,
     trade_id: int,
     user: AuthUser = Depends(get_current_user),
 ) -> dict:
@@ -572,7 +579,9 @@ async def close_sim_trade(
 
 
 @router.post("/real-trades")
+@limiter.limit("10/minute")
 async def create_real_trade(
+    request: Request,
     req: RealTradeCreate,
     user: AuthUser = Depends(get_current_user),
 ) -> dict:
@@ -655,7 +664,9 @@ async def list_real_trades(
 
 
 @router.patch("/real-trades/{trade_id}")
+@limiter.limit("30/minute")
 async def patch_real_trade(
+    request: Request,
     trade_id: int,
     req: RealTradePatch,
     user: AuthUser = Depends(get_current_user),
