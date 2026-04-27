@@ -219,6 +219,15 @@ jobs:
           ID=$(printf '%s' "$RAW_ID"     | tr -d '[:space:]')
           SECRET=$(printf '%s' "$RAW_SECRET" | tr -d '[:space:]')
           echo "CF Access header lengths: id=${#ID} secret=${#SECRET} (expected id=39 secret=64)"
+          # Fingerprint = first 8 hex chars of SHA-256 of the trimmed value.
+          # Enough to detect byte-level mismatches between this stored value
+          # and a known-good reference (e.g. the user's local shell), but
+          # short enough not to leak the secret. To compare locally:
+          #   echo -n "$CF_ID"     | sha256sum | cut -c1-8
+          #   echo -n "$CF_SECRET" | sha256sum | cut -c1-8
+          ID_FP=$(printf '%s' "$ID"     | sha256sum | cut -c1-8)
+          SECRET_FP=$(printf '%s' "$SECRET" | sha256sum | cut -c1-8)
+          echo "CF Access header fingerprints (sha256[:8]): id=$ID_FP secret=$SECRET_FP"
           if [ -z "$ID" ] || [ -z "$SECRET" ]; then
             echo "::warning::CF_ACCESS_CLIENT_ID or _SECRET is empty after trim — secrets likely unset"
           fi
