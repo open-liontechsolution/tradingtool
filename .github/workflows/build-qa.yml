@@ -202,6 +202,35 @@ jobs:
       CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
       CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
     steps:
+      # Defensive normalisation: GitHub's `gh secret set` (interactive) and
+      # the web UI both happily store a trailing newline if the user submits
+      # with Enter. CF Access compares headers byte-for-byte; a stray `\n`
+      # in either header is enough to send every request to 403, the worst
+      # silent failure mode (we lost an hour to it post-#103). Strip ALL
+      # whitespace from both, log the resulting lengths so the next run is
+      # instantly diagnosable (Client ID = 39: 32 hex + ".access", Secret
+      # = 64 hex). The values themselves are never echoed.
+      - name: Normalise CF Access headers + length sanity
+        env:
+          RAW_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          RAW_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+        run: |
+          set -euo pipefail
+          ID=$(printf '%s' "$RAW_ID"     | tr -d '[:space:]')
+          SECRET=$(printf '%s' "$RAW_SECRET" | tr -d '[:space:]')
+          echo "CF Access header lengths: id=${#ID} secret=${#SECRET} (expected id=39 secret=64)"
+          if [ -z "$ID" ] || [ -z "$SECRET" ]; then
+            echo "::warning::CF_ACCESS_CLIENT_ID or _SECRET is empty after trim — secrets likely unset"
+          fi
+          {
+            echo "CF_ACCESS_CLIENT_ID=$ID"
+            echo "CF_ACCESS_CLIENT_SECRET=$SECRET"
+          } >> "$GITHUB_ENV"
+          # Mask the trimmed values in case they differ from the raw ones
+          # (different masks needed when `\n` is stripped).
+          echo "::add-mask::$ID"
+          echo "::add-mask::$SECRET"
+
       - name: Wait for /healthz
         run: |
           set -euo pipefail
