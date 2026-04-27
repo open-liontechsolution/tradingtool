@@ -5,7 +5,8 @@ on:
     branches:
       - develop
     paths-ignore:
-      - ".github/workflows/**"
+      # Auto-bot commits to helm/env/{dev,qa}.yaml only flip the image tag
+      # — no need to re-run lint/tests for those.
       - "helm/env/**"
 
 jobs:
@@ -63,31 +64,6 @@ jobs:
 
       - name: Run tests
         run: pytest tests/ -v --tb=short
-
-  test-parity:
-    name: Parity harness (sample, slot_a)
-    runs-on: ubuntu-latest
-    # Non-blocking: replays slot_a only through both engines and asserts
-    # trade-log parity. The full matrix (slots a-d × all strategies, plus
-    # leveraged liquidation on slot_d) runs in the nightly workflow
-    # (.github/workflows/parity-nightly.yml). PARITY_SLOTS=slot_a keeps the
-    # PR-time job under a minute so the CI quota stays sane (#69). Promote
-    # to required once the sample has been green for a few weeks.
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.13"
-
-      - name: Install dependencies
-        run: pip install -r requirements-dev.txt
-
-      - name: Run slow parity tests (slot_a sample)
-        env:
-          PARITY_SLOTS: slot_a
-        run: pytest -m slow tests/integration/test_parity.py -v --tb=short
 
   dependency-review:
     name: Dependency review (block CVEs ≥ HIGH)
