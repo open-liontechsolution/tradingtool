@@ -39,6 +39,29 @@ resources:
     cpu: 500m
     memory: 512Mi
 
+# Pod-level security context applied to every container. Per-container
+# overrides live below in `securityContext` (app) and
+# `cloudflareTunnel.securityContext` (sidecar). See #78.
+podSecurityContext:
+  runAsNonRoot: true
+  fsGroup: 1001
+  seccompProfile:
+    type: RuntimeDefault
+
+# App container security context (Pod Security Standards: restricted).
+# `readOnlyRootFilesystem: true` requires emptyDir mounts for the writable
+# paths the app touches at runtime — `/tmp` (Python/uvicorn) and
+# `/app/data` (defensive: only used if SQLite, never in dev/qa where
+# DATABASE_URL is set, but keeps the mkdir in init_db() safe).
+securityContext:
+  runAsUser: 1001
+  runAsGroup: 1001
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
 service:
   type: ClusterIP
   port: 8000
@@ -66,6 +89,20 @@ cloudflareTunnel:
     limits:
       cpu: 200m
       memory: 128Mi
+  # Sidecar security context. The cloudflare/cloudflared image runs as the
+  # `nonroot` user (uid 65532); pinning the uid explicitly so kubelet can
+  # validate `runAsNonRoot: true` (set at pod level) without resolving the
+  # symbolic name from /etc/passwd inside the image.
+  # `readOnlyRootFilesystem` is intentionally NOT set yet — cloudflared in
+  # token mode buffers small connection state to disk; add it as a follow-up
+  # once we've validated under load.
+  securityContext:
+    runAsUser: 65532
+    runAsGroup: 65532
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
 
 ingress:
   enabled: false
