@@ -360,12 +360,16 @@ jobs:
             -d "$payload")
           id=$(jq -r '.id' <<<"$created")
           echo "Created config id=$id"
+          # GET /api/signals/configs returns {"configs": [...]}, not a bare
+          # array. The previous filter `.[] | select(.id == $id)` iterated
+          # the wrapping object's keys and tried `.id` on the inner array,
+          # which fails with "Cannot index array with string 'id'".
           curl -fsS \
             -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
             -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
             -H "Authorization: Bearer $TOKEN" \
             "$QA_BASE_URL/api/signals/configs" \
-            | jq -e ".[] | select(.id == $id)" > /dev/null
+            | jq -e ".configs[] | select(.id == $id)" > /dev/null
           curl -fsS -X DELETE \
             -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
             -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
