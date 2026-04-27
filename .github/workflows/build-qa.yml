@@ -240,37 +240,6 @@ jobs:
           echo "::add-mask::$ID"
           echo "::add-mask::$SECRET"
 
-      # Diagnostic single shot before the wait loop. Captures status code,
-      # response headers and the first 500 bytes of body. The wait loop
-      # below only knows "non-2xx" — but the body/headers tell us WHO
-      # is denying:
-      #   - HTML "Just a moment..." / "Attention Required!" → CF Bot Fight
-      #     Mode / Super Bot Fight Mode is challenging the runner before
-      #     Access ever evaluates the policy.
-      #   - HTML / JSON with `cf-mitigated` header set → CF firewall rule.
-      #   - JSON `{"errors": [...]}` from Access → policy mismatch (token
-      #     not in policy, UUID stale, etc.). At this point only this
-      #     case means we still have a value/policy problem.
-      # Header values are masked by the prior `::add-mask::` calls so the
-      # log never echoes them. (Local fallback if the smoke is gone:
-      # `curl -i ... | head -c 1500`.)
-      - name: Probe /healthz once and dump response (diagnostic)
-        run: |
-          set +e
-          response=$(curl -sS -o /tmp/cf_body.txt -w 'http=%{http_code} cf_ray=%header{cf-ray} cf_mitigated=%header{cf-mitigated} server=%header{server}\n' \
-            -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
-            -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
-            -D /tmp/cf_headers.txt \
-            "$QA_BASE_URL/healthz")
-          echo "$response"
-          echo "---response headers---"
-          head -30 /tmp/cf_headers.txt || true
-          echo "---response body (first 500 bytes)---"
-          head -c 500 /tmp/cf_body.txt || true
-          echo
-          echo "---/end of probe---"
-          rm -f /tmp/cf_body.txt /tmp/cf_headers.txt
-
       - name: Wait for /healthz
         run: |
           set -euo pipefail
