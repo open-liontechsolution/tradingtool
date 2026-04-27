@@ -213,3 +213,9 @@ Replays a fixed klines fixture through both the backtest engine and the live eng
 - **QA versioning convention**: tags follow `vMAJOR.MINOR.PATCH-rcN`. New major or minor cycle starts at `rc1`; subsequent fixes during the same QA cycle increment the rc (`-rc2`, `-rc3`, ...). When a `-rcN` is validated in QA it gets re-tagged as the prod release (separate workflow when prod exists).
 - **Secrets**: never committed. Live under `helm/secrets/<env>.yaml` (per-env, gitignored). Template at `helm/secrets/example.yaml` (committed). Apply with `kubectl apply -f helm/secrets/<env>.yaml`. Legacy locations (`helm/env/secrets.yaml`, `helm/env/secrets-*.yaml`) stay covered by `.gitignore` for backwards compatibility, but new env manifests should land under `helm/secrets/`.
 - **Postgres provisioning**: the CNPG cluster `platform-postgres-dev` is shared. The dev DB+user were created by hand; the qa DB (`tradingtool-qa`) and user (`tradingtool-qa-user`) are created the same way (one-off `psql` against the superuser, see `argocd/qa-application.yaml` header for the actual SQL).
+
+## Supply chain (post-#79)
+
+- **SBOM per build**: `build-dev.yml` and `build-qa.yml` each include a `generate-sbom` job that runs `anchore/sbom-action` against the freshly pushed image digest and uploads the SPDX-JSON output as a workflow artifact (`sbom-dev-<sha>.spdx.json` / `sbom-qa-<tag>.spdx.json`). Non-blocking on failure — Trivy already gates on CVEs; the SBOM exists for offline auditing. Download from the Actions run page → Artifacts.
+- **Dependency review on PRs**: `ci.yml` has a `dependency-review` job using `actions/dependency-review-action@v4`. Blocks PRs that introduce dependencies with CVEs ≥ HIGH. Posts a comment on the PR when it fails (`comment-summary-in-pr: on-failure`).
+- Out of scope here: `cosign` signing / SLSA provenance, scanning the SBOM against an external vuln DB (Trivy already covers the image surface).
