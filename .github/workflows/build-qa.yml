@@ -313,16 +313,32 @@ jobs:
           # No CF-Access headers here — Keycloak lives on a different host
           # (keycloak-dev.liontechsolution.com) outside the qa Access
           # Application.
-          token=$(curl -fsS -X POST \
+          # Capture status + body to a tempfile so a 4xx/5xx response shows
+          # Keycloak's `{"error": "...", "error_description": "..."}` JSON
+          # in the log instead of a bare exit-22 from curl. Common errors:
+          #   unauthorized_client   → Direct Access Grants disabled on client
+          #   invalid_grant         → user/password wrong or user disabled
+          #   invalid_client        → client confidential, missing client_secret
+          status=$(curl -s -o /tmp/kc_response.json -w '%{http_code}' \
+            -X POST \
             "${KEYCLOAK_URL%/}/realms/${KEYCLOAK_REALM}/protocol/openid-connect/token" \
             -d "client_id=${KEYCLOAK_CLIENT_ID}" \
             -d "username=${SMOKE_USER}" \
             -d "password=${SMOKE_PASSWORD}" \
             -d "grant_type=password" \
-            -d "scope=openid" \
-            | jq -r '.access_token')
+            -d "scope=openid")
+          if [ "$status" != "200" ]; then
+            echo "Keycloak token endpoint returned HTTP $status" >&2
+            echo "---response body---" >&2
+            head -c 500 /tmp/kc_response.json >&2
+            echo >&2
+            rm -f /tmp/kc_response.json
+            exit 1
+          fi
+          token=$(jq -r '.access_token' < /tmp/kc_response.json)
+          rm -f /tmp/kc_response.json
           if [ -z "$token" ] || [ "$token" = "null" ]; then
-            echo "Token retrieval failed" >&2
+            echo "Token retrieval failed (200 but no access_token in response)" >&2
             exit 1
           fi
           echo "::add-mask::$token"
