@@ -110,6 +110,34 @@ jobs:
           format: table
           vuln-type: os,library
 
+  generate-sbom:
+    name: Generate SBOM (SPDX JSON)
+    needs:
+      - resolve-tag
+      - build-and-push
+    runs-on: ubuntu-latest
+    # Non-blocking on failure: SBOM is for auditing, not gating (#79).
+    continue-on-error: true
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ needs.build-and-push.outputs.image_digest }}
+          format: spdx-json
+          artifact-name: sbom-qa-${{ needs.resolve-tag.outputs.image_tag }}.spdx.json
+          upload-artifact: true
+          upload-release-assets: false
+
   update-tag:
     name: Update qa image tag for Argo CD
     needs:
@@ -265,6 +293,7 @@ jobs:
     needs:
       - build-and-push
       - scan-image
+      - generate-sbom
       - update-tag
     runs-on: ubuntu-latest
     permissions:
