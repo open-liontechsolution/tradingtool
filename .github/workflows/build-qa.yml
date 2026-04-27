@@ -299,14 +299,14 @@ jobs:
     permissions:
       packages: write
     steps:
-      # Multi-arch images create 1 manifest list + 2 platform children per push.
-      # Keeping 15 versions retains ~5 multi-arch builds. Runs *after* scan-image
-      # and update-tag so we never delete a child manifest that Trivy still
-      # needs to resolve.
-      - name: Delete old package versions (keep last 15)
+      # Multi-arch images create 1 manifest list + 2 platform children per
+      # push. Keeping 90 versions matches the dev cleanup retention so QA
+      # release candidates have the same margin against the multi-arch
+      # cleanup race documented in build-dev.yml (#103 incident).
+      - name: Delete old package versions (keep last 90)
         uses: actions/delete-package-versions@v5
         with:
           package-name: tradingtools
           package-type: container
-          min-versions-to-keep: 15
+          min-versions-to-keep: 90
           delete-only-untagged-versions: false
