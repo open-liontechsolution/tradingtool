@@ -104,10 +104,11 @@ def _build_csp(keycloak_url: str) -> str | None:
     * ``connect-src`` and ``frame-src`` allow the Keycloak host so that
       ``oidc-client-ts`` can fetch the token endpoint, JWKS, and run
       the silent-renew iframe.
-    * Stays in Report-Only mode initially so we can observe violations
-      via ``/api/csp-report`` without breaking the SPA. Promote to
-      enforcement (``Content-Security-Policy``) once the report log is
-      quiet for a few days.
+    * Header is now sent as ``Content-Security-Policy`` (enforcing) — the
+      previous Report-Only phase ran clean in dev, so violations now
+      block instead of just being reported. The ``report-uri
+      /api/csp-report`` directive stays so future regressions still
+      surface in logs even though they're blocked at runtime.
     """
     if not keycloak_url:
         return None
@@ -126,15 +127,18 @@ def _build_csp(keycloak_url: str) -> str | None:
     )
 
 
-_CSP_REPORT_ONLY = _build_csp(KEYCLOAK_URL)
+_CSP = _build_csp(KEYCLOAK_URL)
 
 
 @app.middleware("http")
 async def security_headers(request: Request, call_next):
     """Attach baseline security headers to every response.
 
-    CSP runs in Report-Only mode for now — see ``_build_csp`` for the
-    rationale and the rollout plan to switch to enforcement.
+    CSP is enforcing now (post-#82). The Report-Only phase under #77 ran
+    clean in dev, so violations block the request at the browser instead
+    of merely being reported. The ``report-uri /api/csp-report`` directive
+    inside the CSP string stays, so any future regression still surfaces
+    in logs even though it's blocked at runtime.
     """
     response = await call_next(request)
     response.headers.setdefault("X-Frame-Options", "DENY")
@@ -145,8 +149,8 @@ async def security_headers(request: Request, call_next):
         "Strict-Transport-Security",
         "max-age=31536000; includeSubDomains",
     )
-    if _CSP_REPORT_ONLY is not None:
-        response.headers.setdefault("Content-Security-Policy-Report-Only", _CSP_REPORT_ONLY)
+    if _CSP is not None:
+        response.headers.setdefault("Content-Security-Policy", _CSP)
     return response
 
 

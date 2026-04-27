@@ -126,3 +126,40 @@ def test_build_csp_allows_google_fonts():
     csp = _build_csp("https://keycloak.example.com")
     assert "https://fonts.googleapis.com" in csp
     assert "https://fonts.gstatic.com" in csp
+
+
+# ---------------------------------------------------------------------------
+# CSP — header attached to responses (enforcing, post-#82)
+# ---------------------------------------------------------------------------
+
+
+def test_csp_header_is_enforcing_not_report_only(monkeypatch):
+    """Lock in the post-#82 contract: the header is `Content-Security-Policy`
+    (enforcing), not `Content-Security-Policy-Report-Only`. Regression
+    guard against a downgrade back to Report-Only mode."""
+    import backend.app as app_module
+
+    monkeypatch.setattr(app_module, "_CSP", "default-src 'self'; report-uri /api/csp-report")
+
+    client = TestClient(_build_app())
+    resp = client.get("/ping")
+    assert resp.status_code == 200
+    assert "Content-Security-Policy" in resp.headers
+    assert "Content-Security-Policy-Report-Only" not in resp.headers
+    assert "report-uri /api/csp-report" in resp.headers["Content-Security-Policy"]
+
+
+def test_csp_header_absent_when_keycloak_url_empty(monkeypatch):
+    """Local-dev path with AUTH_ENABLED=false leaves _CSP=None, so no
+    CSP header is attached (the other baseline headers still are)."""
+    import backend.app as app_module
+
+    monkeypatch.setattr(app_module, "_CSP", None)
+
+    client = TestClient(_build_app())
+    resp = client.get("/ping")
+    assert resp.status_code == 200
+    assert "Content-Security-Policy" not in resp.headers
+    assert "Content-Security-Policy-Report-Only" not in resp.headers
+    # Baseline headers still present.
+    assert resp.headers["X-Frame-Options"] == "DENY"
