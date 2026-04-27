@@ -70,3 +70,32 @@ async def test_execute_insert_with_explicit_returning_is_not_rewritten():
     # The wrapper must leave the caller's RETURNING untouched — no second append.
     assert sent_query.count("RETURNING") == 1
     assert sent_query.rstrip().endswith("RETURNING token")
+
+
+# ---------------------------------------------------------------------------
+# Pool lifecycle helpers (post-#84)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_init_pg_pool_is_noop_under_sqlite(monkeypatch):
+    """SQLite has no pool concept; init_pg_pool must be a silent no-op so
+    the SQLite test path (which is the entire CI suite today) doesn't try
+    to connect to a Postgres server that isn't there."""
+    import backend.database as dbmod
+
+    monkeypatch.setattr(dbmod, "IS_POSTGRES", False)
+    monkeypatch.setattr(dbmod, "_pg_pool", None)
+    await dbmod.init_pg_pool()
+    assert dbmod._pg_pool is None
+
+
+@pytest.mark.asyncio
+async def test_close_pg_pool_is_safe_when_uninitialized(monkeypatch):
+    """close_pg_pool must not crash if init_pg_pool was never called or was
+    already torn down. Lifespan shutdown can hit this when startup failed."""
+    import backend.database as dbmod
+
+    monkeypatch.setattr(dbmod, "_pg_pool", None)
+    await dbmod.close_pg_pool()  # must not raise
+    assert dbmod._pg_pool is None

@@ -11,6 +11,7 @@ SQLite init_db() creates the schema on first run; PostgreSQL relies on Alembic m
 from __future__ import annotations
 
 import logging
+import os
 import re
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -141,15 +142,86 @@ class _PgCursor:
         return self._rows[0] if self._rows else None
 
 
-@asynccontextmanager
-async def _get_pg_db() -> AsyncIterator[_PgConnection]:
+# Shared asyncpg pool — initialised by ``init_pg_pool()`` at lifespan startup
+# and torn down by ``close_pg_pool()`` at shutdown. Stays ``None`` for the
+# SQLite path. Sized via PG_POOL_MIN_SIZE / PG_POOL_MAX_SIZE /
+# PG_POOL_MAX_INACTIVE_LIFETIME (see init_pg_pool docstring).
+_pg_pool: Any = None
+
+
+async def init_pg_pool() -> None:
+    """Create the shared asyncpg pool. Called from app lifespan startup.
+
+    No-op when ``IS_POSTGRES`` is False — SQLite has no concept of a pool
+    and ``_get_sqlite_db`` opens a fresh connection per call (which is the
+    desired model under aiosqlite + WAL).
+
+    Sizing knobs (env vars):
+    - ``PG_POOL_MIN_SIZE`` (default 2): keep at least this many idle
+      connections warm to absorb burst arrivals without paying handshake.
+    - ``PG_POOL_MAX_SIZE`` (default 20): hard ceiling. Per-replica, so a
+      cluster with N pods can in the worst case open ``N × max`` server
+      connections — keep this in mind when scaling horizontally.
+    - ``PG_POOL_MAX_INACTIVE_LIFETIME`` (default 300s): close idle
+      connections older than this so we recycle through any DB-side
+      connection limits / TLS rotations.
+    """
+    global _pg_pool
+
+    if not IS_POSTGRES:
+        return
+
+    if _pg_pool is not None:
+        return  # already initialised — second lifespan startup, idempotent.
+
     import asyncpg  # noqa: PLC0415
 
-    conn = await asyncpg.connect(DATABASE_URL)
-    try:
+    min_size = int(os.environ.get("PG_POOL_MIN_SIZE", "2"))
+    max_size = int(os.environ.get("PG_POOL_MAX_SIZE", "20"))
+    max_inactive = float(os.environ.get("PG_POOL_MAX_INACTIVE_LIFETIME", "300"))
+
+    log = logging.getLogger(__name__)
+    log.info("Creating asyncpg pool (min=%s max=%s)", min_size, max_size)
+    _pg_pool = await asyncpg.create_pool(
+        DATABASE_URL,
+        min_size=min_size,
+        max_size=max_size,
+        max_inactive_connection_lifetime=max_inactive,
+    )
+
+
+async def close_pg_pool() -> None:
+    """Close the shared asyncpg pool. Called from app lifespan shutdown."""
+    global _pg_pool
+    if _pg_pool is None:
+        return
+    await _pg_pool.close()
+    _pg_pool = None
+
+
+@asynccontextmanager
+async def _get_pg_db() -> AsyncIterator[_PgConnection]:
+    """Acquire a connection from the shared pool.
+
+    Falls back to a one-shot ``asyncpg.connect`` when the pool isn't
+    initialised. That window only exists during ``init_db()`` (which runs
+    Alembic migrations) and inside test code that imports the module
+    without going through ``init_pg_pool()``. Production traffic always
+    goes through the pool because ``init_pg_pool`` runs in the lifespan
+    *before* the FastAPI server starts accepting requests.
+    """
+    import asyncpg  # noqa: PLC0415
+
+    if _pg_pool is None:
+        conn = await asyncpg.connect(DATABASE_URL)
+        try:
+            yield _PgConnection(conn)
+        finally:
+            await conn.close()
+        return
+
+    async with _pg_pool.acquire() as conn:
         yield _PgConnection(conn)
-    finally:
-        await conn.close()
 
 
 # ---------------------------------------------------------------------------
