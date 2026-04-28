@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { apiFetch } from '../../auth/apiFetch'
 import FieldLabel from '../FieldLabel'
+import { useToast } from '../useToast'
 import { PAIRS, INTERVALS } from './helpers'
 import { CapitalConfig } from './CapitalConfig'
 
@@ -36,6 +37,7 @@ export function ConfigForm({ strategies, onCreated }) {
   const [capitalMode, setCapitalMode] = useState('leverage')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
+  const toast = useToast()
 
   useEffect(() => {
     if (strategies.length > 0 && !selectedStrat) {
@@ -81,12 +83,16 @@ export function ConfigForm({ strategies, onCreated }) {
       })
       if (!res.ok) {
         const err = await res.json().catch(() => ({}))
-        setError(err.detail ?? `HTTP ${res.status}`)
+        const msg = err.detail ?? `HTTP ${res.status}`
+        setError(msg)
+        toast.error(`Failed to create config: ${msg}`)
         return
       }
+      toast.success(`Signal config created for ${symbol} ${interval}`)
       onCreated()
     } catch (e) {
       setError(e.message)
+      toast.error(`Network error: ${e.message}`)
     } finally {
       setLoading(false)
     }

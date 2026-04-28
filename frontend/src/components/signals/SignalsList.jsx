@@ -1,9 +1,16 @@
 import { ConfigBadge, StatusBadge } from './ConfigBadge'
+import EmptyState from '../EmptyState'
 import { fmtNum, fmtTime, fmtIso } from './helpers'
 
 export function SignalsList({ signals }) {
   if (!signals || signals.length === 0) {
-    return <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem', padding: 'var(--space-3)' }}>No signals generated yet.</div>
+    return (
+      <EmptyState
+        icon="📡"
+        title="No signals generated yet"
+        description="El motor genera señales cuando una vela cierra cumpliendo las condiciones de la estrategia. Suele tardar al menos un cierre completo del intervalo configurado."
+      />
+    )
   }
   return (
     <div>

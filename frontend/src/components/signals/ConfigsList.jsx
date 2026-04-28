@@ -1,9 +1,16 @@
 import { ToggleSwitch } from './ToggleSwitch'
+import EmptyState from '../EmptyState'
 import { fmtMoney } from './helpers'
 
 export function ConfigsList({ configs, onToggle, onToggleTelegram, onDelete, onResetEquity }) {
   if (!configs || configs.length === 0) {
-    return <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem', padding: 'var(--space-3)' }}>No signal configs yet.</div>
+    return (
+      <EmptyState
+        icon="⚙️"
+        title="No signal configs yet"
+        description="Crea una configuración abajo para que el motor empiece a evaluar señales."
+      />
+    )
   }
 
   return (
