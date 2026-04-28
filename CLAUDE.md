@@ -231,6 +231,31 @@ Replays a fixed klines fixture through both the backtest engine and the live eng
 - **Secret scanning (gitleaks)** (post-#80): `.github/workflows/secret-scan.yml` runs gitleaks on every PR to develop/main and on every push to any branch (so a leak that lands on a feature branch before a PR exists still gets caught — see the #73 incident). It's a required gate (no `continue-on-error`); the check name to mark required in repo settings is **Secret scan / Gitleaks (CLI)**. GitHub's native secret scanning + push protection are enabled separately via repo Settings → Code security and analysis.
 - Out of scope here: `cosign` signing / SLSA provenance, scanning the SBOM against an external vuln DB (Trivy already covers the image surface).
 
+## Branch protection (post-#81)
+
+Both `develop` and `main` are protected via repository **rulesets** (Settings → Rules → Rulesets — not the legacy "Branch protection rules" UI). Public repos on free tier support rulesets fully. Rulesets can be edited in the UI or via `gh api repos/:owner/:repo/rulesets/<id>` — the JSON bodies used to apply the current config live at `/tmp/tt-rulesets/*.json` in #81's PR description for reference.
+
+| Aspect | `develop-merge-protection` (id 13359417) | `main-protection` (id 15652898) |
+|---|---|---|
+| `deletion` rule | ON | ON |
+| `non_fast_forward` rule | ON | ON |
+| `required_linear_history` | OFF (squash/rebase suffices) | **ON** (no merge commits) |
+| `pull_request.required_approving_review_count` | 0 | 0 |
+| `pull_request.dismiss_stale_reviews_on_push` | ON | ON |
+| `pull_request.required_review_thread_resolution` | ON | ON |
+| `pull_request.allowed_merge_methods` | squash, rebase | squash, rebase |
+| `required_status_checks.strict_required_status_checks_policy` | ON (branches up-to-date before merge) | ON |
+| Required checks | Lint backend / Lint frontend / Test backend / Build frontend / **Secret scan / Gitleaks (CLI)** | Lint backend / Lint frontend / Test backend / Build frontend |
+| `bypass_actors` | one Integration (actor_id 3008410) — kept so the auto-bot can push tag bumps to `helm/env/dev.yaml` from `build-dev.yml::update-tag` | empty |
+
+Approvals stay at **0** because the project is solo today; status checks already gate. Bump to `1` (and add yourself as a bypass actor, or wait for the second collaborator) when the team grows.
+
+`required_linear_history` only applies to `main` because we want a clean linear release history when prod releases start landing there. `develop` allows non-linear-history-but-squash-merged PRs to keep the integration branch ergonomics intact.
+
+The Gitleaks check is required only on `develop` because the secret-scan workflow runs on every PR to develop/main + every push (#80) — by the time a PR reaches main from develop it has already passed Gitleaks once.
+
+If a future workflow needs to push directly to `main` (e.g., a release-promotion workflow that tags `vX.Y.Z` from `develop@HEAD`), add its GitHub App as a bypass actor on `main-protection` — same pattern as develop's tag-bump bot.
+
 ## CI gotchas worth remembering
 
 - **Pushes from `GITHUB_TOKEN` don't fire downstream workflows.** GitHub suppresses them as loop prevention. So any workflow that pushes a tag/commit and expects another workflow to react (e.g. `tag-qa-release.yml` → `build-qa.yml::on.push.tags`) MUST author the push with the GitHub App token (`TT_APP_ID` / `TT_APP_PRIVATE_KEY`), wired through `actions/checkout`'s `token:` so subsequent `git push` runs under App credentials. `build-dev.yml::update-tag`, `build-qa.yml::update-tag`, and `tag-qa-release.yml` all follow this pattern. We hit this on the first run after #85 (PR #100 fix).
