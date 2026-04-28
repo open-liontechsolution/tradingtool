@@ -35,6 +35,8 @@ PORT: int = int(os.environ.get("PORT", "8000"))
 HOST: str = os.environ.get("HOST", "0.0.0.0")
 LOG_LEVEL: str = os.environ.get("LOG_LEVEL", "info")
 
+IMAGE_TAG: str = os.environ.get("IMAGE_TAG", "unknown")
+
 
 def _resolve_cors_origins(raw: str, auth_enabled: bool) -> list[str]:
     """Parse CORS_ORIGINS and refuse the wildcard when auth is real.

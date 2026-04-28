@@ -144,6 +144,7 @@ Outbound alerts flow through a single entry point — `notifications.notify_even
 | `TELEGRAM_BOT_USERNAME` | `""` | Bot username (no `@`); used to build the `https://t.me/<bot>?start=<token>` deep-link in link-token responses |
 | `TELEGRAM_WEBHOOK_SECRET` | `""` | Secret embedded in the webhook path and verified in the `X-Telegram-Bot-Api-Secret-Token` header |
 | `TELEGRAM_WEBHOOK_URL` | `""` | If set (together with the bot token), `setWebhook` is invoked once at app lifespan startup |
+| `IMAGE_TAG` | `unknown` | Injected by Helm from `.Values.image.tag`; surfaced in `/healthz` so the QA smoke can verify the served pod matches the just-promoted build (#114). Don't read in app code. |
 
 Frontend-only (placed in `frontend/.env.development.local`, only needed to override dev defaults):
 `VITE_AUTH_ENABLED`, `VITE_KEYCLOAK_URL`, `VITE_KEYCLOAK_REALM`, `VITE_KEYCLOAK_CLIENT_ID`
@@ -239,5 +240,5 @@ Replays a fixed klines fixture through both the backtest engine and the live eng
 
 ## QA validation
 
-- **CI smoke E2E** (`build-qa.yml::smoke-e2e`): scripted, runs after every QA build, validates `/healthz` + `/api/auth/config` + Keycloak login + create/get/delete a signal_config. Catches functional regressions on the API surface. **Caveat**: today the smoke fires immediately after `update-tag`, before Argo finishes rolling — it likely hits the OLD pod, not the just-deployed image. Tracked in #114; the fix needs a wait-for-rollout step.
+- **CI smoke E2E** (`build-qa.yml::smoke-e2e`): scripted, runs after every QA build, validates `/healthz` + `/api/auth/config` + Keycloak login + create/get/delete a signal_config. Catches functional regressions on the API surface. Post-#114 the smoke poléa `/healthz` until the served `image_tag` matches the just-promoted rc (cap 4 min, hard-fail on timeout) — so we're always validating the new pod, not whichever pod was already serving traffic during the rolling update. Still soft-gated (`continue-on-error: true`) until the new contract has been green for ~2 weeks of releases.
 - **Deep walkthrough** (`.claude/skills/qa-walkthrough/SKILL.md`): on-demand agent-driven exploration via playwright-cli + Firefox. Triggered only when the user explicitly asks ("haz un walkthrough de qa", "/qa-walkthrough"). Covers visual + functional flows that scripted tests can't judge (broken layouts, blank charts, console errors), creates a dummy config + cleans it up, writes a dated markdown report to `qa-walkthrough-reports/`. Screenshots are gitignored (heavy, regenerable); the markdown reports ARE committed for historical regression review. The skill is project-scoped so it evolves with the codebase — when a new panel ships, add a Stage section to the SKILL.md.

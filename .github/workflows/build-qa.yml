@@ -240,23 +240,47 @@ jobs:
           echo "::add-mask::$ID"
           echo "::add-mask::$SECRET"
 
-      - name: Wait for /healthz
+      # Post-#114: poll /healthz until the served `image_tag` matches the
+      # one we just promoted, NOT just any 200. Argo CD QA is sync-automated
+      # but not instant — its default reconcile loop is ~3 min, plus a
+      # 30-60s rollout. Without this check, the smoke fired immediately
+      # after `update-tag` and validated whichever pod was already
+      # serving traffic (i.e. the previous build), turning the whole
+      # smoke into a silent false positive.
+      #
+      # Cap is 4 min: covers the 95th percentile of Argo's reconcile + pull
+      # + readiness window. If we hit timeout consistently, the right
+      # answer is to bump the cap (or set up an Argo→GitHub
+      # repository_dispatch webhook) rather than make the gate softer.
+      - name: Wait for rollout (poll /healthz until image_tag matches)
+        env:
+          EXPECTED_TAG: ${{ needs.resolve-tag.outputs.image_tag }}
         run: |
           set -euo pipefail
-          deadline=$(( $(date +%s) + 600 ))
-          until curl -fsS --max-time 10 \
+          deadline=$(( $(date +%s) + 240 ))
+          attempt=0
+          served_tag="(no-response-yet)"
+          while :; do
+            attempt=$((attempt + 1))
+            body=$(curl -fsS --max-time 10 \
               -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
               -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
-              "$QA_BASE_URL/healthz" > /dev/null; do
+              "$QA_BASE_URL/healthz" || true)
+            if [ -n "$body" ]; then
+              served_tag=$(printf '%s' "$body" | jq -r '.image_tag // "unknown"' 2>/dev/null || echo "parse-error")
+            fi
+            if [ "$served_tag" = "$EXPECTED_TAG" ]; then
+              echo "Rollout complete after ${attempt} attempts: served_tag=${served_tag}"
+              break
+            fi
             now=$(date +%s)
             if [ "$now" -ge "$deadline" ]; then
-              echo "Timeout: $QA_BASE_URL/healthz never returned 200 within 10 min" >&2
+              echo "::error::Timeout (4 min): served_tag=${served_tag} expected=${EXPECTED_TAG}. Argo CD likely still rolling out, or rollout failed. Check the trading-tool-qa Application in Argo." >&2
               exit 1
             fi
-            echo "Waiting for QA app to come up..."
-            sleep 15
+            echo "attempt=${attempt} served_tag=${served_tag} expected=${EXPECTED_TAG} — waiting 10s"
+            sleep 10
           done
-          echo "App is healthy."
 
       - name: Verify /api/auth/config returns 200
         run: |
