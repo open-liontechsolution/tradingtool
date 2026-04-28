@@ -1,7 +1,27 @@
 import { useState, useEffect } from 'react'
 import { apiFetch } from '../../auth/apiFetch'
+import FieldLabel from '../FieldLabel'
 import { PAIRS, INTERVALS } from './helpers'
 import { CapitalConfig } from './CapitalConfig'
+
+const STRATEGY_PARAM_TIPS = {
+  reversal_pct: 'Mínimo % de retroceso desde el extremo móvil para confirmar un swing (soporte/resistencia). E.g. 0.03 = 3%.',
+  N_entrada: 'Nº de velas hacia atrás para detectar el breakout de entrada (sin contar la actual).',
+  M_salida: 'Nº de velas hacia atrás para la señal de salida. Debe ser ≤ N.',
+  stop_pct: 'Distancia del stop como fracción del precio de referencia de entrada (e.g. 0.02 = 2%).',
+  modo_ejecucion: 'open_next: la orden se llena al open de la siguiente vela (realista). close_current: se llena al close de la vela de señal (optimista).',
+  habilitar_long: 'Permite entradas long (compra) cuando el precio cierra por encima del breakout de la N-vela.',
+  habilitar_short: 'Permite entradas short (venta) cuando el precio cierra por debajo del breakout de la N-vela.',
+  coste_total_bps: 'Coste total round-trip en basis points (1 bps = 0.01%). Cubre fees + slippage de entrada y salida.',
+}
+
+const FIELD_TIPS = {
+  pair: 'Par de criptomonedas a operar. Solo USDT por ahora.',
+  interval: 'Timeframe de las velas. Define cada cuánto evalúa el motor de señales el cierre de vela.',
+  strategy: 'Estrategia a ejecutar. Cada una expone sus propios parámetros más abajo.',
+  costBps: 'Coste de transacción aplicado a cada lado del trade en basis points (1 bps = 0.01%). Binance ≈ 10 bps/lado.',
+  maintenanceMargin: 'Margen de mantenimiento usado para calcular el precio de liquidación. Binance baseline ≈ 0.005 (0.5%) para notional bajo.',
+}
 
 export function ConfigForm({ strategies, onCreated }) {
   const [symbol, setSymbol] = useState('BTCUSDT')
@@ -76,19 +96,19 @@ export function ConfigForm({ strategies, onCreated }) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 'var(--space-3)' }}>
         <div className="form-group">
-          <label className="form-label">Pair</label>
+          <FieldLabel tooltip={FIELD_TIPS.pair}>Pair</FieldLabel>
           <select className="form-control" value={symbol} onChange={e => setSymbol(e.target.value)} disabled={loading}>
             {PAIRS.map(p => <option key={p} value={p}>{p}</option>)}
           </select>
         </div>
         <div className="form-group">
-          <label className="form-label">Interval</label>
+          <FieldLabel tooltip={FIELD_TIPS.interval}>Interval</FieldLabel>
           <select className="form-control" value={interval} onChange={e => setInterval(e.target.value)} disabled={loading}>
             {INTERVALS.map(iv => <option key={iv.value} value={iv.value}>{iv.label}</option>)}
           </select>
         </div>
         <div className="form-group">
-          <label className="form-label">Strategy</label>
+          <FieldLabel tooltip={FIELD_TIPS.strategy}>Strategy</FieldLabel>
           {strategies.length === 0 ? (
             <div style={{ padding: '8px 12px', background: 'var(--bg-input)', border: '1px solid var(--border-default)', borderRadius: 'var(--radius-sm)', color: 'var(--text-muted)', fontSize: '0.83rem' }}>
               Loading strategies…
@@ -105,10 +125,11 @@ export function ConfigForm({ strategies, onCreated }) {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: 'var(--space-3)' }}>
           {currentStrat.parameters.map(p => {
             const val = paramValues[p.name] !== undefined ? paramValues[p.name] : p.default
+            const tip = STRATEGY_PARAM_TIPS[p.name] ?? p.description ?? undefined
             if (p.type === 'bool') {
               return (
                 <div key={p.name} className="form-group">
-                  <label className="form-label">{p.name}</label>
+                  <FieldLabel tooltip={tip}>{p.name}</FieldLabel>
                   <div className="toggle-group">
                     <button type="button" className={`toggle-option${val === true || val === 'true' ? ' active' : ''}`}
                       onClick={() => !loading && setParamValues(prev => ({ ...prev, [p.name]: true }))}>On</button>
@@ -121,7 +142,7 @@ export function ConfigForm({ strategies, onCreated }) {
             if (p.type === 'str') {
               return (
                 <div key={p.name} className="form-group">
-                  <label className="form-label">{p.name}</label>
+                  <FieldLabel tooltip={tip}>{p.name}</FieldLabel>
                   <select className="form-control" value={val}
                     onChange={e => setParamValues(prev => ({ ...prev, [p.name]: e.target.value }))} disabled={loading}>
                     {['open_next', 'close_current'].map(o => <option key={o} value={o}>{o}</option>)}
@@ -131,7 +152,7 @@ export function ConfigForm({ strategies, onCreated }) {
             }
             return (
               <div key={p.name} className="form-group">
-                <label className="form-label">{p.name}</label>
+                <FieldLabel tooltip={tip}>{p.name}</FieldLabel>
                 <input type="number" className="form-control" value={val}
                   min={p.min ?? undefined} max={p.max ?? undefined}
                   step={p.type === 'float' ? 0.001 : 1}
@@ -150,12 +171,12 @@ export function ConfigForm({ strategies, onCreated }) {
           <div className="section-title">Risk Parameters</div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-3)' }}>
             <div className="form-group">
-              <label className="form-label">Cost (bps)</label>
+              <FieldLabel tooltip={FIELD_TIPS.costBps}>Cost (bps)</FieldLabel>
               <input type="number" className="form-control" value={costBps} min={0} step={1}
                 onChange={e => setCostBps(parseFloat(e.target.value) || 0)} disabled={loading} />
             </div>
             <div className="form-group">
-              <label className="form-label" title="Maintenance margin used for the liquidation-price formula. Binance baseline ≈ 0.005 (0.5%) for low notional.">Maint. margin %</label>
+              <FieldLabel tooltip={FIELD_TIPS.maintenanceMargin}>Maint. margin %</FieldLabel>
               <input type="number" className="form-control" value={maintenanceMarginPct} min={0} step={0.001}
                 onChange={e => setMaintenanceMarginPct(parseFloat(e.target.value) || 0)} disabled={loading} />
             </div>
