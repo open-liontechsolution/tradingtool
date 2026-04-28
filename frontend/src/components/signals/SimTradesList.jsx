@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import { apiFetch } from '../../auth/apiFetch'
 import TradeReviewChart from '../TradeReviewChart'
+import EmptyState from '../EmptyState'
+import Skeleton from '../Skeleton'
 import { ConfigBadge, StatusBadge } from './ConfigBadge'
 import { fmtNum, fmtMoney } from './helpers'
 
@@ -49,7 +51,13 @@ export function SimTradesList({ trades, onClose }) {
   }, [expandedId, movesByTrade])
 
   if (!trades || trades.length === 0) {
-    return <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem', padding: 'var(--space-3)' }}>No sim trades yet.</div>
+    return (
+      <EmptyState
+        icon="📊"
+        title="No sim trades yet"
+        description="Activa una configuración en Configurations y espera a que el motor de señales abra un trade simulado."
+      />
+    )
   }
 
   const detailed = viewMode === 'detailed'
@@ -250,7 +258,14 @@ function SimTradeReview({ trade, moves, loadingMoves }) {
 }
 
 function StopMovesDetail({ moves, loading }) {
-  if (loading) return <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Loading stop moves…</div>
+  if (loading) {
+    return (
+      <div>
+        <div style={{ fontWeight: 600, marginBottom: 'var(--space-2)' }}>Stop moves</div>
+        <Skeleton rows={3} />
+      </div>
+    )
+  }
   if (!moves || moves.length === 0) {
     return <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>No stop moves for this trade.</div>
   }

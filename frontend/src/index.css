@@ -575,6 +575,90 @@ select.form-control option {
   font-feature-settings: 'tnum' 1;
 }
 
+/* ---- Skeleton placeholder ---- */
+.skeleton {
+  display: block;
+  background: linear-gradient(
+    90deg,
+    var(--bg-elevated) 0%,
+    var(--border-subtle) 50%,
+    var(--bg-elevated) 100%
+  );
+  background-size: 200% 100%;
+  border-radius: var(--radius-sm);
+  animation: skeleton-shimmer 1.4s ease-in-out infinite;
+}
+
+@keyframes skeleton-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton { animation: none; opacity: 0.6; }
+}
+
+.skeleton-row {
+  height: 20px;
+  margin: var(--space-2) 0;
+}
+
+/* ---- Toast ---- */
+.toast-container {
+  position: fixed;
+  bottom: var(--space-4);
+  right: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  z-index: 1000;
+  pointer-events: none;
+}
+
+.toast-item {
+  pointer-events: auto;
+  min-width: 260px;
+  max-width: 420px;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-default);
+  background: var(--bg-card);
+  box-shadow: var(--shadow-card);
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  font-size: 0.85rem;
+  color: var(--text-primary);
+  animation: toast-slide-in 200ms ease-out;
+}
+
+@keyframes toast-slide-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toast-item { animation: none; }
+}
+
+.toast-item--error { border-color: var(--color-danger); background: rgba(239, 68, 68, 0.08); }
+.toast-item--warning { border-color: var(--color-warning); background: rgba(234, 179, 8, 0.08); }
+.toast-item--success { border-color: var(--color-success); background: rgba(34, 197, 94, 0.08); }
+.toast-item--info { border-color: var(--color-info, var(--border-strong)); }
+
+.toast-item__icon { font-size: 1rem; line-height: 1.2; flex-shrink: 0; }
+.toast-item__body { flex: 1; line-height: 1.4; }
+.toast-item__close {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+  font-size: 1rem;
+}
+.toast-item__close:hover { color: var(--text-primary); }
+
 /* ---- Sticky table headers ---- */
 .trade-table--sticky thead tr {
   position: sticky;

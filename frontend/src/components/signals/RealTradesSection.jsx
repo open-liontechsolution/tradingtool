@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { apiFetch } from '../../auth/apiFetch'
 import FieldLabel from '../FieldLabel'
+import EmptyState from '../EmptyState'
+import { useToast } from '../useToast'
 import { StatusBadge } from './ConfigBadge'
 import { PAIRS, fmtNum, fmtMoney } from './helpers'
 
@@ -30,6 +32,7 @@ export function RealTradesSection() {
   const [closeForm, setCloseForm] = useState({ exit_price: '', pnl: '', exit_time: '', notes: '' })
   const [closeError, setCloseError] = useState(null)
   const [justClosedId, setJustClosedId] = useState(null)
+  const toast = useToast()
 
   const fetchRealTrades = useCallback(async () => {
     try {
@@ -105,7 +108,9 @@ export function RealTradesSection() {
       if (!res.ok) {
         let detail = `HTTP ${res.status}`
         try { const j = await res.json(); if (j?.detail) detail = j.detail } catch { /* non-JSON body */ }
-        setCloseError(`Close failed: ${detail}`)
+        const msg = `Close failed: ${detail}`
+        setCloseError(msg)
+        toast.error(msg)
         return
       }
       await fetchRealTrades()
@@ -113,8 +118,11 @@ export function RealTradesSection() {
       setCloseForm({ exit_price: '', pnl: '', exit_time: '', notes: '' })
       setJustClosedId(trade.id)
       setTimeout(() => setJustClosedId(prev => (prev === trade.id ? null : prev)), 1500)
+      toast.success(`Real trade #${trade.id} closed`)
     } catch (e) {
-      setCloseError(e?.message || 'Network error closing trade')
+      const msg = e?.message || 'Network error closing trade'
+      setCloseError(msg)
+      toast.error(msg)
     } finally {
       setLoading(false)
     }
@@ -187,7 +195,11 @@ export function RealTradesSection() {
       )}
 
       {realTrades.length === 0 ? (
-        <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>No real trades registered.</div>
+        <EmptyState
+          icon="💵"
+          title="No real trades registered"
+          description="Cuando ejecutes un trade real en tu exchange, regístralo aquí para comparar con el sim trade equivalente."
+        />
       ) : (
         <div style={{ overflowX: 'auto' }}>
           <table className="trade-table">
