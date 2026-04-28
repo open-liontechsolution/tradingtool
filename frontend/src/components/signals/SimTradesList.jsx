@@ -1,13 +1,29 @@
-import React, { useState, useCallback, useMemo } from 'react'
+import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import { apiFetch } from '../../auth/apiFetch'
 import TradeReviewChart from '../TradeReviewChart'
 import { ConfigBadge, StatusBadge } from './ConfigBadge'
 import { fmtNum, fmtMoney } from './helpers'
 
+const STORAGE_KEY = 'signalsTableMode'
+
+function loadInitialMode() {
+  try {
+    const v = window.localStorage.getItem(STORAGE_KEY)
+    return v === 'detailed' ? 'detailed' : 'compact'
+  } catch {
+    return 'compact'
+  }
+}
+
 export function SimTradesList({ trades, onClose }) {
   const [expandedId, setExpandedId] = useState(null)
   const [movesByTrade, setMovesByTrade] = useState({})
   const [loadingMoves, setLoadingMoves] = useState(false)
+  const [viewMode, setViewMode] = useState(loadInitialMode)
+
+  useEffect(() => {
+    try { window.localStorage.setItem(STORAGE_KEY, viewMode) } catch { /* ignore */ }
+  }, [viewMode])
 
   const toggleExpand = useCallback(async (tradeId) => {
     if (expandedId === tradeId) {
@@ -35,88 +51,149 @@ export function SimTradesList({ trades, onClose }) {
   if (!trades || trades.length === 0) {
     return <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem', padding: 'var(--space-3)' }}>No sim trades yet.</div>
   }
+
+  const detailed = viewMode === 'detailed'
+  const colCount = detailed ? 15 : 10
+
   return (
-    <div style={{ overflowX: 'auto' }}>
-      <table className="trade-table">
-        <thead>
-          <tr>
-            <th style={{ width: '2rem' }}></th>
-            <th className="ta-right">ID</th>
-            <th>Config</th>
-            <th>Symbol</th>
-            <th>Side</th>
-            <th className="ta-right" title="Capital usado al abrir este trade (snapshot del current_portfolio en ese momento)">Cap@entry</th>
-            <th className="ta-right">Entry</th>
-            <th className="ta-right">Stop</th>
-            <th className="ta-right" title="Precio de liquidación. NULL en trades sin apalancamiento. Se cierra automáticamente aquí en vez de en el stop si el precio cruza primero.">Liq</th>
-            <th className="ta-right">Exit</th>
-            <th>Reason</th>
-            <th className="ta-right">PnL</th>
-            <th className="ta-right">PnL %</th>
-            <th>Status</th>
-            <th className="ta-center">Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          {trades.map(t => {
-            const pnlColor = t.pnl > 0 ? 'var(--color-success)' : t.pnl < 0 ? 'var(--color-danger)' : 'var(--text-secondary)'
-            const isExpanded = expandedId === t.id
-            const moves = movesByTrade[t.id]
-            return (
-              <React.Fragment key={t.id}>
-                <tr>
-                  <td className="ta-center">
-                    <button
-                      type="button"
-                      onClick={() => toggleExpand(t.id)}
-                      title="Show stop-move history"
-                      style={{
-                        background: 'transparent', border: 'none', cursor: 'pointer',
-                        color: 'var(--text-muted)', padding: '0.25rem',
-                      }}
-                    >{isExpanded ? '▾' : '▸'}</button>
-                  </td>
-                  <td className="ta-right num-col" style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}>{t.id}</td>
-                  <td>
-                    <ConfigBadge configId={t.config_id} strategy={t.config_strategy} params={t.config_params} />
-                  </td>
-                  <td>{t.symbol}</td>
-                  <td style={{ color: t.side === 'long' ? 'var(--color-success)' : 'var(--color-danger)', fontWeight: 600 }}>
-                    {t.side?.toUpperCase()}
-                  </td>
-                  <td className="ta-right num-col" style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>{t.portfolio != null ? fmtMoney(t.portfolio) : '—'}</td>
-                  <td className="ta-right num-col">{t.entry_price ? fmtNum(t.entry_price, 4) : '—'}</td>
-                  <td className="ta-right num-col">{fmtNum(t.stop_base, 4)}</td>
-                  <td className="ta-right num-col" style={{ color: t.liquidation_price != null ? 'var(--color-warning)' : 'var(--text-muted)', fontSize: '0.85rem' }}>
-                    {t.liquidation_price != null ? fmtNum(t.liquidation_price, 4) : '—'}
-                  </td>
-                  <td className="ta-right num-col">{t.exit_price ? fmtNum(t.exit_price, 4) : '—'}</td>
-                  <td>{t.exit_reason || '—'}</td>
-                  <td className="ta-right num-col" style={{ color: pnlColor, fontWeight: 600 }}>
-                    {t.pnl != null ? (t.pnl > 0 ? '+' : '') + fmtMoney(t.pnl) : '—'}
-                  </td>
-                  <td className="ta-right num-col" style={{ color: pnlColor }}>
-                    {t.pnl_pct != null ? (t.pnl_pct > 0 ? '+' : '') + fmtNum(t.pnl_pct * 100, 2) + '%' : '—'}
-                  </td>
-                  <td><StatusBadge status={t.status} /></td>
-                  <td className="ta-center">
-                    {t.status === 'open' && (
-                      <button className="btn btn-sm btn-secondary" onClick={() => onClose(t.id)}>Close</button>
-                    )}
-                  </td>
-                </tr>
-                {isExpanded && (
+    <div>
+      <div style={{
+        display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 'var(--space-2)',
+        marginBottom: 'var(--space-2)', fontSize: '0.78rem', color: 'var(--text-muted)',
+      }}>
+        <span>View:</span>
+        <div className="toggle-group" role="tablist" aria-label="Table density">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={!detailed}
+            className={`toggle-option${!detailed ? ' active' : ''}`}
+            onClick={() => setViewMode('compact')}
+          >Compact</button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={detailed}
+            className={`toggle-option${detailed ? ' active' : ''}`}
+            onClick={() => setViewMode('detailed')}
+          >Detailed</button>
+        </div>
+      </div>
+
+      <div style={{ overflowX: 'auto', maxHeight: '70vh', overflowY: 'auto' }}>
+        <table className="trade-table trade-table--sticky">
+          <thead>
+            <tr>
+              <th style={{ width: '2rem' }}></th>
+              <th className="ta-right">ID</th>
+              <th>Config</th>
+              <th>Symbol</th>
+              <th>Side</th>
+              {detailed && (
+                <th className="ta-right" title="Capital usado al abrir este trade (snapshot del current_portfolio en ese momento)">Cap@entry</th>
+              )}
+              <th className="ta-right">Entry{!detailed && <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}> / Stop</span>}</th>
+              {detailed && <th className="ta-right">Stop</th>}
+              {detailed && (
+                <th className="ta-right" title="Precio de liquidación. NULL en trades sin apalancamiento. Se cierra automáticamente aquí en vez de en el stop si el precio cruza primero.">Liq</th>
+              )}
+              <th className="ta-right">Exit</th>
+              {detailed && <th>Reason</th>}
+              <th className="ta-right">PnL{!detailed && <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}> / %</span>}</th>
+              {detailed && <th className="ta-right">PnL %</th>}
+              <th>Status</th>
+              <th className="ta-center">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {trades.map(t => {
+              const pnlColor = t.pnl > 0 ? 'var(--color-success)' : t.pnl < 0 ? 'var(--color-danger)' : 'var(--text-secondary)'
+              const isExpanded = expandedId === t.id
+              const moves = movesByTrade[t.id]
+              return (
+                <React.Fragment key={t.id}>
                   <tr>
-                    <td colSpan={15} style={{ background: 'var(--surface-1)', padding: 'var(--space-3)' }}>
-                      <SimTradeReview trade={t} moves={moves} loadingMoves={loadingMoves && moves === undefined} />
+                    <td className="ta-center">
+                      <button
+                        type="button"
+                        onClick={() => toggleExpand(t.id)}
+                        title="Show stop-move history"
+                        style={{
+                          background: 'transparent', border: 'none', cursor: 'pointer',
+                          color: 'var(--text-muted)', padding: '0.25rem',
+                        }}
+                      >{isExpanded ? '▾' : '▸'}</button>
+                    </td>
+                    <td className="ta-right num-col" style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}>{t.id}</td>
+                    <td>
+                      <ConfigBadge configId={t.config_id} strategy={t.config_strategy} params={t.config_params} />
+                    </td>
+                    <td>{t.symbol}</td>
+                    <td style={{ color: t.side === 'long' ? 'var(--color-success)' : 'var(--color-danger)', fontWeight: 600 }}>
+                      {t.side?.toUpperCase()}
+                    </td>
+                    {detailed && (
+                      <td className="ta-right num-col" style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>{t.portfolio != null ? fmtMoney(t.portfolio) : '—'}</td>
+                    )}
+                    {detailed ? (
+                      <td className="ta-right num-col">{t.entry_price ? fmtNum(t.entry_price, 4) : '—'}</td>
+                    ) : (
+                      <td className="ta-right num-col">
+                        <div className="cell-stack">
+                          <span className="cell-stack__primary">{t.entry_price ? fmtNum(t.entry_price, 4) : '—'}</span>
+                          <span className="cell-stack__secondary">{fmtNum(t.stop_base, 4)}{t.liquidation_price != null && <span style={{ color: 'var(--color-warning)' }}> · liq {fmtNum(t.liquidation_price, 4)}</span>}</span>
+                        </div>
+                      </td>
+                    )}
+                    {detailed && <td className="ta-right num-col">{fmtNum(t.stop_base, 4)}</td>}
+                    {detailed && (
+                      <td className="ta-right num-col" style={{ color: t.liquidation_price != null ? 'var(--color-warning)' : 'var(--text-muted)', fontSize: '0.85rem' }}>
+                        {t.liquidation_price != null ? fmtNum(t.liquidation_price, 4) : '—'}
+                      </td>
+                    )}
+                    <td className="ta-right num-col">{t.exit_price ? fmtNum(t.exit_price, 4) : '—'}</td>
+                    {detailed && <td>{t.exit_reason || '—'}</td>}
+                    {detailed ? (
+                      <td className="ta-right num-col" style={{ color: pnlColor, fontWeight: 600 }}>
+                        {t.pnl != null ? (t.pnl > 0 ? '+' : '') + fmtMoney(t.pnl) : '—'}
+                      </td>
+                    ) : (
+                      <td className="ta-right num-col" style={{ color: pnlColor }}>
+                        <div className="cell-stack">
+                          <span className="cell-stack__primary" style={{ fontWeight: 600 }}>
+                            {t.pnl != null ? (t.pnl > 0 ? '+' : '') + fmtMoney(t.pnl) : '—'}
+                          </span>
+                          <span className="cell-stack__secondary" style={{ color: pnlColor, opacity: 0.85 }}>
+                            {t.pnl_pct != null ? (t.pnl_pct > 0 ? '+' : '') + fmtNum(t.pnl_pct * 100, 2) + '%' : ''}
+                          </span>
+                        </div>
+                      </td>
+                    )}
+                    {detailed && (
+                      <td className="ta-right num-col" style={{ color: pnlColor }}>
+                        {t.pnl_pct != null ? (t.pnl_pct > 0 ? '+' : '') + fmtNum(t.pnl_pct * 100, 2) + '%' : '—'}
+                      </td>
+                    )}
+                    <td><StatusBadge status={t.status} /></td>
+                    <td className="ta-center">
+                      {t.status === 'open' && (
+                        <button className="btn btn-sm btn-secondary" onClick={() => onClose(t.id)}>Close</button>
+                      )}
                     </td>
                   </tr>
-                )}
-              </React.Fragment>
-            )
-          })}
-        </tbody>
-      </table>
+                  {isExpanded && (
+                    <tr>
+                      <td colSpan={colCount} style={{ background: 'var(--surface-1)', padding: 'var(--space-3)' }}>
+                        <SimTradeReview trade={t} moves={moves} loadingMoves={loadingMoves && moves === undefined} />
+                      </td>
+                    </tr>
+                  )}
+                </React.Fragment>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
     </div>
   )
 }

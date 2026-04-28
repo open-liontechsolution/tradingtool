@@ -575,6 +575,25 @@ select.form-control option {
   font-feature-settings: 'tnum' 1;
 }
 
+/* ---- Sticky table headers ---- */
+.trade-table--sticky thead tr {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+/* Cell that stacks a primary value over a muted secondary line. */
+.cell-stack {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+}
+.cell-stack__primary { color: var(--text-primary); }
+.cell-stack__secondary {
+  color: var(--text-muted);
+  font-size: 0.7rem;
+}
+
 /* ---- Spinner ---- */
 .spinner {
   width: 16px;
