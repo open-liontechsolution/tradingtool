@@ -18,6 +18,12 @@ function App() {
   }, [isAdmin])
 
   const [activeTab, setActiveTab] = useState(isAdmin ? 'data' : 'signals')
+  const [navOpen, setNavOpen] = useState(false)
+
+  const selectTab = (id) => {
+    setActiveTab(id)
+    setNavOpen(false)
+  }
 
   // Loading state
   if (isLoading) {
@@ -63,12 +69,23 @@ function App() {
           </div>
         </div>
 
-        <nav className="tab-nav">
+        <button
+          type="button"
+          className="topbar-burger"
+          aria-label={navOpen ? 'Close navigation' : 'Open navigation'}
+          aria-expanded={navOpen}
+          aria-controls="primary-nav"
+          onClick={() => setNavOpen(o => !o)}
+        >
+          <span aria-hidden="true">{navOpen ? '✕' : '☰'}</span>
+        </button>
+
+        <nav id="primary-nav" className={`tab-nav${navOpen ? ' tab-nav--open' : ''}`}>
           {tabs.map(tab => (
             <button
               key={tab.id}
               className={`tab-btn${activeTab === tab.id ? ' active' : ''}`}
-              onClick={() => setActiveTab(tab.id)}
+              onClick={() => selectTab(tab.id)}
             >
               {tab.label}
             </button>
@@ -76,7 +93,7 @@ function App() {
         </nav>
 
         <div className="topbar-user">
-          <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginRight: 'var(--space-3)' }}>{username}</span>
+          <span className="topbar-username">{username}</span>
           <button
             onClick={logout}
             style={{

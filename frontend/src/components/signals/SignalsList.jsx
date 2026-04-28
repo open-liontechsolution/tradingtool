@@ -24,7 +24,7 @@ export function SignalsList({ signals }) {
         <strong style={{ color: 'var(--text-secondary)' }}>Stop (SL)</strong>: nivel de stop-loss para tu exchange — el sistema cierra aquí también el SimTrade.
       </div>
 
-      <div style={{ overflowX: 'auto' }}>
+      <div className="trade-table-wrap">
         <table className="trade-table">
           <thead>
             <tr>

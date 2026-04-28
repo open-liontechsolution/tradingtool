@@ -88,7 +88,7 @@ export function SimTradesList({ trades, onClose }) {
         </div>
       </div>
 
-      <div style={{ overflowX: 'auto', maxHeight: '70vh', overflowY: 'auto' }}>
+      <div className="trade-table-wrap" style={{ maxHeight: '70vh', overflowY: 'auto' }}>
         <table className="trade-table trade-table--sticky">
           <thead>
             <tr>
