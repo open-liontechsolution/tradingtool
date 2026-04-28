@@ -84,6 +84,10 @@ export function ConfigForm({ strategies, onCreated }) {
   }
 
   const currentStrat = strategies.find(s => s.name === selectedStrat)
+  // Hide ``coste_total_bps`` from the wizard: it duplicates the Step 2 ``Cost (bps)``
+  // field, which is the live-equity source of truth. Persisted at submit-time as a
+  // mirror of ``costBps`` so the strategy params dict stays internally consistent.
+  const visibleParams = (currentStrat?.parameters ?? []).filter(p => p.name !== 'coste_total_bps')
 
   const step1Valid = !!selectedStrat
   const step2Valid =
@@ -96,7 +100,9 @@ export function ConfigForm({ strategies, onCreated }) {
     Symbol: symbol,
     Interval: INTERVALS.find(i => i.value === interval)?.label ?? interval,
     Strategy: selectedStrat,
-    Params: Object.entries(paramValues).map(([k, v]) => `${k}=${v}`).join(', ') || '—',
+    Params: Object.entries(paramValues)
+      .filter(([k]) => k !== 'coste_total_bps')
+      .map(([k, v]) => `${k}=${v}`).join(', ') || '—',
     'Cost (bps)': costBps,
     'Maint. margin %': maintenanceMarginPct,
     Portfolio: fmtMoney(portfolio),
@@ -111,7 +117,7 @@ export function ConfigForm({ strategies, onCreated }) {
     try {
       const body = {
         symbol, interval, strategy: selectedStrat,
-        params: paramValues,
+        params: { ...paramValues, coste_total_bps: costBps },
         cost_bps: costBps,
         maintenance_margin_pct: maintenanceMarginPct,
         initial_portfolio: portfolio,
@@ -175,9 +181,9 @@ export function ConfigForm({ strategies, onCreated }) {
             </div>
           </div>
 
-          {currentStrat && currentStrat.parameters && currentStrat.parameters.length > 0 && (
+          {currentStrat && visibleParams.length > 0 && (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: 'var(--space-3)' }}>
-              {currentStrat.parameters.map(p => {
+              {visibleParams.map(p => {
                 const val = paramValues[p.name] !== undefined ? paramValues[p.name] : p.default
                 const tip = STRATEGY_PARAM_TIPS[p.name] ?? p.description ?? undefined
                 if (p.type === 'bool') {
