@@ -1,9 +1,23 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { apiFetch } from '../../auth/apiFetch'
+import FieldLabel from '../FieldLabel'
 import { StatusBadge } from './ConfigBadge'
 import { PAIRS, fmtNum, fmtMoney } from './helpers'
 
 const FEE_WARN_PCT = 0.05
+
+const TIPS = {
+  simTradeId: 'ID del sim-trade que estás replicando con dinero real. Permite comparar slippage entre simulación y ejecución real (tab Compare).',
+  symbol: 'Par operado en el exchange.',
+  side: 'long: compraste primero. short: vendiste primero (margin/futures).',
+  entryPrice: 'Precio efectivo al que abriste la posición (después de fees de entrada si tu exchange los descuenta del precio).',
+  quantity: 'Cantidad de la criptomoneda base (no USDT). E.g. 0.1 BTC.',
+  fees: 'Fees totales de entrada en USD. Si los pones aquí no los pongas también dentro del PnL al cerrar.',
+  notes: 'Cualquier contexto que quieras retener: por qué tomaste el trade, condiciones del mercado, etc.',
+  exitPrice: 'Precio efectivo al que cerraste la posición.',
+  netPnl: 'PnL neto en USD (después de descontar fees del exchange). Si lo dejas en bruto, el sistema avisa si los fees implicados parecen anómalos.',
+  exitTime: 'Hora del cierre. Si la dejas vacía se usa "ahora".',
+}
 
 export function RealTradesSection() {
   const [realTrades, setRealTrades] = useState([])
@@ -125,19 +139,19 @@ export function RealTradesSection() {
         <div className="card" style={{ marginBottom: 'var(--space-4)', padding: 'var(--space-4)' }}>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 'var(--space-3)' }}>
             <div className="form-group">
-              <label className="form-label">Link to SimTrade ID</label>
+              <FieldLabel tooltip={TIPS.simTradeId}>Link to SimTrade ID</FieldLabel>
               <input type="number" className="form-control" value={form.sim_trade_id}
                 onChange={e => setForm(prev => ({ ...prev, sim_trade_id: e.target.value }))} placeholder="Optional" />
             </div>
             <div className="form-group">
-              <label className="form-label">Symbol</label>
+              <FieldLabel tooltip={TIPS.symbol}>Symbol</FieldLabel>
               <select className="form-control" value={form.symbol}
                 onChange={e => setForm(prev => ({ ...prev, symbol: e.target.value }))}>
                 {PAIRS.map(p => <option key={p} value={p}>{p}</option>)}
               </select>
             </div>
             <div className="form-group">
-              <label className="form-label">Side</label>
+              <FieldLabel tooltip={TIPS.side}>Side</FieldLabel>
               <select className="form-control" value={form.side}
                 onChange={e => setForm(prev => ({ ...prev, side: e.target.value }))}>
                 <option value="long">Long</option>
@@ -145,23 +159,23 @@ export function RealTradesSection() {
               </select>
             </div>
             <div className="form-group">
-              <label className="form-label">Entry Price</label>
+              <FieldLabel tooltip={TIPS.entryPrice} required>Entry Price</FieldLabel>
               <input type="number" className="form-control" value={form.entry_price} step="0.01"
                 onChange={e => setForm(prev => ({ ...prev, entry_price: e.target.value }))} />
             </div>
             <div className="form-group">
-              <label className="form-label">Quantity</label>
+              <FieldLabel tooltip={TIPS.quantity} required>Quantity</FieldLabel>
               <input type="number" className="form-control" value={form.quantity} step="0.0001"
                 onChange={e => setForm(prev => ({ ...prev, quantity: e.target.value }))} />
             </div>
             <div className="form-group">
-              <label className="form-label">Fees</label>
+              <FieldLabel tooltip={TIPS.fees}>Fees</FieldLabel>
               <input type="number" className="form-control" value={form.fees} step="0.01"
                 onChange={e => setForm(prev => ({ ...prev, fees: e.target.value }))} />
             </div>
           </div>
           <div className="form-group" style={{ marginTop: 'var(--space-3)' }}>
-            <label className="form-label">Notes</label>
+            <FieldLabel tooltip={TIPS.notes}>Notes</FieldLabel>
             <input type="text" className="form-control" value={form.notes}
               onChange={e => setForm(prev => ({ ...prev, notes: e.target.value }))} placeholder="Optional notes" />
           </div>
@@ -237,25 +251,25 @@ export function RealTradesSection() {
                         <td colSpan={11} style={{ padding: 'var(--space-3)' }}>
                           <div style={{ display: 'flex', gap: 'var(--space-3)', alignItems: 'flex-end', flexWrap: 'wrap' }}>
                             <div className="form-group" style={{ marginBottom: 0 }}>
-                              <label className="form-label" style={{ fontSize: '0.75rem' }}>Exit Price *</label>
+                              <FieldLabel tooltip={TIPS.exitPrice} required style={{ fontSize: '0.75rem' }}>Exit Price</FieldLabel>
                               <input type="number" className="form-control" step="0.01" style={{ width: 130 }}
                                 value={closeForm.exit_price}
                                 onChange={e => setCloseForm(prev => ({ ...prev, exit_price: e.target.value }))} />
                             </div>
                             <div className="form-group" style={{ marginBottom: 0 }}>
-                              <label className="form-label" style={{ fontSize: '0.75rem' }}>Net PnL *</label>
+                              <FieldLabel tooltip={TIPS.netPnl} required style={{ fontSize: '0.75rem' }}>Net PnL</FieldLabel>
                               <input type="number" className="form-control" step="0.01" style={{ width: 130 }}
                                 value={closeForm.pnl}
                                 onChange={e => setCloseForm(prev => ({ ...prev, pnl: e.target.value }))} />
                             </div>
                             <div className="form-group" style={{ marginBottom: 0 }}>
-                              <label className="form-label" style={{ fontSize: '0.75rem' }}>Exit Time</label>
+                              <FieldLabel tooltip={TIPS.exitTime} style={{ fontSize: '0.75rem' }}>Exit Time</FieldLabel>
                               <input type="datetime-local" className="form-control" style={{ width: 190 }}
                                 value={closeForm.exit_time}
                                 onChange={e => setCloseForm(prev => ({ ...prev, exit_time: e.target.value }))} />
                             </div>
                             <div className="form-group" style={{ marginBottom: 0 }}>
-                              <label className="form-label" style={{ fontSize: '0.75rem' }}>Notes</label>
+                              <FieldLabel tooltip={TIPS.notes} style={{ fontSize: '0.75rem' }}>Notes</FieldLabel>
                               <input type="text" className="form-control" style={{ width: 160 }}
                                 value={closeForm.notes} placeholder="Optional"
                                 onChange={e => setCloseForm(prev => ({ ...prev, notes: e.target.value }))} />

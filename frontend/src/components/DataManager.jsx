@@ -1,5 +1,13 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { apiFetch } from '../auth/apiFetch'
+import FieldLabel from './FieldLabel'
+
+const FIELD_TIPS = {
+  pair: 'Par de criptomonedas a descargar desde Binance Spot. Solo USDT por ahora.',
+  interval: 'Timeframe de las velas. 1h/4h son los más usados; intervalos más cortos generan más datos y descargas más largas.',
+  startDate: 'Fecha de inicio de la descarga (UTC). Binance tiene historia desde 2017 para BTC; otros pares más recientes.',
+  endDate: 'Fecha final inclusiva. Por defecto es hoy.',
+}
 
 const PAIRS = [
   'BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'XRPUSDT',
@@ -409,9 +417,8 @@ export default function DataManager() {
         <div className="card-body" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
 
           <div className="grid-2">
-            {/* Pair selector */}
             <div className="form-group">
-              <label className="form-label">Trading Pair</label>
+              <FieldLabel tooltip={FIELD_TIPS.pair}>Trading Pair</FieldLabel>
               <select
                 className="form-control"
                 value={symbol}
@@ -424,9 +431,8 @@ export default function DataManager() {
               </select>
             </div>
 
-            {/* Interval selector */}
             <div className="form-group">
-              <label className="form-label">Interval</label>
+              <FieldLabel tooltip={FIELD_TIPS.interval}>Interval</FieldLabel>
               <select
                 className="form-control"
                 value={interval}
@@ -441,9 +447,8 @@ export default function DataManager() {
           </div>
 
           <div className="grid-2">
-            {/* Start date */}
             <div className="form-group">
-              <label className="form-label">Start Date</label>
+              <FieldLabel tooltip={FIELD_TIPS.startDate}>Start Date</FieldLabel>
               <input
                 type="date"
                 className="form-control"
@@ -454,9 +459,8 @@ export default function DataManager() {
               />
             </div>
 
-            {/* End date */}
             <div className="form-group">
-              <label className="form-label">End Date</label>
+              <FieldLabel tooltip={FIELD_TIPS.endDate}>End Date</FieldLabel>
               <input
                 type="date"
                 className="form-control"

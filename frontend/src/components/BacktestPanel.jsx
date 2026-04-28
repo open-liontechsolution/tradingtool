@@ -3,6 +3,7 @@ import { apiFetch } from '../auth/apiFetch'
 import EquityChart from './EquityChart'
 import TradeLog from './TradeLog'
 import TradeReviewChart from './TradeReviewChart'
+import FieldLabel from './FieldLabel'
 
 const PAIRS = [
   'BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'XRPUSDT',
@@ -74,23 +75,8 @@ const PARAM_META = {
 function ParamLabel({ name, description }) {
   const meta = PARAM_META[name]
   const label = meta?.label ?? name
-  const tip   = meta?.tooltip ?? description ?? ''
-  return (
-    <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-      {label}
-      {tip && (
-        <span style={{ position: 'relative', display: 'inline-flex' }} className="param-help-wrap">
-          <span style={{
-            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-            width: 14, height: 14, borderRadius: '50%',
-            background: 'var(--border-default)', color: 'var(--text-muted)',
-            fontSize: '0.65rem', fontWeight: 700, cursor: 'default', userSelect: 'none', flexShrink: 0,
-          }}>?</span>
-          <span className="param-tooltip">{tip}</span>
-        </span>
-      )}
-    </label>
-  )
+  const tip = meta?.tooltip ?? description ?? ''
+  return <FieldLabel tooltip={tip || undefined}>{label}</FieldLabel>
 }
 
 /* ---- Dynamic parameter form for a strategy ---- */
