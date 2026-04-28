@@ -1,5 +1,5 @@
 image:
-  tag: "v0.1.0-rc10"
+  tag: "v0.1.0-rc11"
 namespace:
   name: "tradingtool-qa"
   create: true
