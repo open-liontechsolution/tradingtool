@@ -59,7 +59,7 @@ function DrawdownTooltip({ active, payload, label }) {
   )
 }
 
-export default function EquityChart({ equityCurve = [], drawdownCurve = [] }) {
+export default function EquityChart({ equityCurve = [], drawdownCurve = [], timestamps = [] }) {
   if (!equityCurve || equityCurve.length === 0) {
     return (
       <div className="empty-state">
@@ -70,9 +70,11 @@ export default function EquityChart({ equityCurve = [], drawdownCurve = [] }) {
     )
   }
 
-  // Both arrays are plain number[] — merge by index
+  // Merge by index. ``timestamps[i]`` is epoch_ms from the backtest engine; the
+  // ``?? i`` fallback only fires for legacy in-memory results that pre-date the
+  // timestamps field — those will render with broken dates until re-run.
   const chartData = equityCurve.map((eq, i) => ({
-    ts: i,
+    ts: timestamps[i] ?? i,
     equity: eq,
     drawdown: (drawdownCurve[i] ?? 0) / 100,  // backend returns pct, chart uses ratio
   }))

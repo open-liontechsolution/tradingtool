@@ -203,6 +203,7 @@ function ResultsView({ result, symbol, interval, startMs, endMs }) {
   if (!result) return null
 
   const equityCurve   = result.equity_curve            ?? []
+  const timestamps    = result.timestamps              ?? []
   const tradeLog      = result.trade_log               ?? []
   const drawdownCurve = result.summary?.drawdown_curve ?? []
 
@@ -247,7 +248,7 @@ function ResultsView({ result, symbol, interval, startMs, endMs }) {
         </a>
       </div>
 
-      {view === 'chart'  && <EquityChart equityCurve={equityCurve} drawdownCurve={drawdownCurve} />}
+      {view === 'chart'  && <EquityChart equityCurve={equityCurve} drawdownCurve={drawdownCurve} timestamps={timestamps} />}
       {view === 'trades' && <TradeLog trades={tradeLog} />}
       {view === 'review' && (
         <TradeReviewChart
