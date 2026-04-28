@@ -235,6 +235,42 @@ async def test_equity_curve_length_matches_candles(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_timestamps_length_matches_equity_curve(monkeypatch):
+    _patch_candles(monkeypatch, _build_flat_candles(n=50))
+
+    step = INTERVAL_MS["1d"]
+    result = await run_backtest(
+        symbol="BTCUSDT",
+        interval="1d",
+        start_ms=0,
+        end_ms=step * 50,
+        strategy_name="breakout",
+        params={"N_entrada": 20, "M_salida": 10, "stop_pct": 0.05},
+        initial_capital=10_000.0,
+    )
+    assert len(result.timestamps) == len(result.equity_curve)
+
+
+@pytest.mark.asyncio
+async def test_timestamps_match_candle_open_time(monkeypatch):
+    candles = _build_flat_candles(n=30)
+    _patch_candles(monkeypatch, candles)
+
+    step = INTERVAL_MS["1d"]
+    result = await run_backtest(
+        symbol="BTCUSDT",
+        interval="1d",
+        start_ms=0,
+        end_ms=step * 30,
+        strategy_name="breakout",
+        params={"N_entrada": 20, "M_salida": 10, "stop_pct": 0.05},
+        initial_capital=10_000.0,
+    )
+    expected = [int(c["open_time"]) for c in candles]
+    assert result.timestamps == expected
+
+
+@pytest.mark.asyncio
 async def test_bankruptcy_detection(monkeypatch):
     """For normal runs, liquidated should be False."""
     _patch_candles(monkeypatch, _build_trending_up_candles(n=60))
