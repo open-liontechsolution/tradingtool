@@ -66,6 +66,7 @@ async def start_backtest(req: BacktestRequest) -> dict:
         "params": req.params,
         "initial_capital": req.initial_capital,
         "equity_curve": result.equity_curve,
+        "timestamps": result.timestamps,
         "trade_log": result.trade_log,
         "summary": result.summary,
         "liquidated": result.liquidated,

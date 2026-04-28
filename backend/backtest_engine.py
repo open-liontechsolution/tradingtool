@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class BacktestResult:
     equity_curve: list[float] = field(default_factory=list)
+    timestamps: list[int] = field(default_factory=list)
     trade_log: list[dict] = field(default_factory=list)
     summary: dict = field(default_factory=dict)
     liquidated: bool = False
@@ -67,6 +68,7 @@ async def run_backtest(
 
     equity = initial_capital
     equity_curve: list[float] = []
+    timestamps: list[int] = []
     trade_log: list[dict] = []
     state = PositionState()
     pending_entry: Signal | None = None  # deferred to next open
@@ -239,6 +241,7 @@ async def run_backtest(
             if equity <= 0:
                 result.liquidated = True
                 result.equity_curve = equity_curve
+                result.timestamps = timestamps
                 result.trade_log = trade_log
                 interval_ms = INTERVAL_MS.get(interval, 86_400_000)
                 result.summary = compute_backtest_metrics(equity_curve, trade_log, initial_capital, interval_ms)
@@ -267,8 +270,10 @@ async def run_backtest(
         else:
             mtm_equity = equity
         equity_curve.append(mtm_equity)
+        timestamps.append(int(candle["open_time"]))
 
     result.equity_curve = equity_curve
+    result.timestamps = timestamps
     result.trade_log = trade_log
     interval_ms = INTERVAL_MS.get(interval, 86_400_000)
     result.summary = compute_backtest_metrics(equity_curve, trade_log, initial_capital, interval_ms)
