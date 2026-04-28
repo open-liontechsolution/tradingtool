@@ -14,7 +14,7 @@ export function ConfigsList({ configs, onToggle, onToggleTelegram, onDelete, onR
   }
 
   return (
-    <div style={{ overflowX: 'auto' }}>
+    <div className="trade-table-wrap">
       <table className="trade-table">
         <thead>
           <tr>

@@ -201,7 +201,7 @@ export function RealTradesSection() {
           description="Cuando ejecutes un trade real en tu exchange, regístralo aquí para comparar con el sim trade equivalente."
         />
       ) : (
-        <div style={{ overflowX: 'auto' }}>
+        <div className="trade-table-wrap">
           <table className="trade-table">
             <thead>
               <tr>

@@ -376,6 +376,69 @@ select.form-control option {
   .main-content { padding: var(--space-4); }
 }
 
+/* ---- Mobile topbar (hamburger drawer) ---- */
+.topbar-burger {
+  display: none;
+  background: transparent;
+  border: 1px solid var(--border-default);
+  color: var(--text-primary);
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-sm);
+  font-size: 1.1rem;
+  cursor: pointer;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+.topbar-burger:hover { background: var(--bg-elevated); }
+
+.topbar-user {
+  display: flex;
+  align-items: center;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+.topbar-username {
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  margin-right: var(--space-3);
+}
+
+@media (max-width: 768px) {
+  .topbar { padding: 0 var(--space-4); gap: var(--space-3); }
+  .topbar-subtitle { display: none; }
+  .topbar-burger { display: inline-flex; align-items: center; justify-content: center; }
+  .topbar-username { display: none; }
+
+  /* Drawer-style nav: hidden by default, expands below the topbar when open */
+  .tab-nav {
+    display: none;
+    position: absolute;
+    top: 56px;
+    left: var(--space-4);
+    right: var(--space-4);
+    flex-direction: column;
+    padding: var(--space-2);
+    background: var(--bg-card);
+    border: 1px solid var(--border-default);
+    box-shadow: var(--shadow-card);
+    z-index: 99;
+  }
+  .tab-nav--open { display: flex; }
+  .tab-nav .tab-btn { width: 100%; text-align: left; padding: var(--space-2) var(--space-3); }
+}
+
+/* ---- Table horizontal scroll affordance ---- */
+.trade-table-wrap {
+  position: relative;
+  overflow-x: auto;
+  /* Right-edge gradient hint that there's more content to scroll to.
+     Subtle on desktop; clearly visible on narrow viewports. */
+  background:
+    linear-gradient(to left, var(--bg-card), transparent 24px) right / 24px 100% no-repeat,
+    var(--bg-card);
+}
+
 /* ---- Flex helpers ---- */
 .flex { display: flex; }
 .flex-col { display: flex; flex-direction: column; }
