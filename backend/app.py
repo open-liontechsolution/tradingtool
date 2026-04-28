@@ -27,6 +27,7 @@ from backend.auth import get_current_user
 from backend.config import (
     AUTH_ENABLED,
     CORS_ORIGINS,
+    IMAGE_TAG,
     IS_POSTGRES,
     KEYCLOAK_AUDIENCE,
     KEYCLOAK_FRONTEND_CLIENT_ID,
@@ -207,7 +208,7 @@ async def auth_config() -> JSONResponse:
 
 @app.get("/healthz", tags=["health"])
 async def liveness() -> JSONResponse:
-    return JSONResponse(content={"status": "alive"})
+    return JSONResponse(content={"status": "alive", "image_tag": IMAGE_TAG})
 
 
 @app.get("/readyz", tags=["health"])

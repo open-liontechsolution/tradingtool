@@ -38,6 +38,9 @@ spec:
             - name: http
               containerPort: 8000
               protocol: TCP
+          env:
+            - name: IMAGE_TAG
+              value: {{ .Values.image.tag | quote }}
           envFrom:
             - configMapRef:
                 name: {{ include "tradingtools.configmapName" . }}
