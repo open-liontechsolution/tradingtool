@@ -228,14 +228,40 @@ Replays a fixed klines fixture through both the backtest engine and the live eng
 
 - **SBOM per build**: `build-dev.yml` and `build-qa.yml` each include a `generate-sbom` job that runs `anchore/sbom-action` against the freshly pushed image digest and uploads the SPDX-JSON output as a workflow artifact (`sbom-dev-<sha>.spdx.json` / `sbom-qa-<tag>.spdx.json`). Non-blocking on failure — Trivy already gates on CVEs; the SBOM exists for offline auditing. Download from the Actions run page → Artifacts.
 - **Dependency review on PRs**: `ci.yml` has a `dependency-review` job using `actions/dependency-review-action@v4`. Blocks PRs that introduce dependencies with CVEs ≥ HIGH. Posts a comment on the PR when it fails (`comment-summary-in-pr: on-failure`).
-- **Secret scanning (gitleaks)** (post-#80): `.github/workflows/secret-scan.yml` runs gitleaks on every PR to develop/main and on every push to any branch (so a leak that lands on a feature branch before a PR exists still gets caught — see the #73 incident). It's a required gate (no `continue-on-error`); the check name to mark required in repo settings is **Secret scan / Gitleaks (CLI)**. GitHub's native secret scanning + push protection are enabled separately via repo Settings → Code security and analysis.
+- **Secret scanning (gitleaks)** (post-#80): `.github/workflows/secret-scan.yml` runs gitleaks on every PR to develop/main and on every push to any branch (so a leak that lands on a feature branch before a PR exists still gets caught — see the #73 incident). It's a required gate (no `continue-on-error`); the check **context** reported by Actions is just the job name **`Gitleaks (CLI)`** — that's what goes in `required_status_checks[].context` (NOT `Secret scan / Gitleaks (CLI)`, which is the workflow/job display name in the UI but never the API context — see CI gotcha "Required-context name vs UI display name"). GitHub's native secret scanning + push protection are enabled separately via repo Settings → Code security and analysis.
 - Out of scope here: `cosign` signing / SLSA provenance, scanning the SBOM against an external vuln DB (Trivy already covers the image surface).
+
+## Branch protection (post-#81)
+
+Both `develop` and `main` are protected via repository **rulesets** (Settings → Rules → Rulesets — not the legacy "Branch protection rules" UI). Public repos on free tier support rulesets fully. Rulesets can be edited in the UI or via `gh api repos/:owner/:repo/rulesets/<id>` — the JSON bodies used to apply the current config live at `/tmp/tt-rulesets/*.json` in #81's PR description for reference.
+
+| Aspect | `develop-merge-protection` (id 13359417) | `main-protection` (id 15652898) |
+|---|---|---|
+| `deletion` rule | ON | ON |
+| `non_fast_forward` rule | ON | ON |
+| `required_linear_history` | OFF (squash/rebase suffices) | **ON** (no merge commits) |
+| `pull_request.required_approving_review_count` | 0 | 0 |
+| `pull_request.dismiss_stale_reviews_on_push` | ON | ON |
+| `pull_request.required_review_thread_resolution` | ON | ON |
+| `pull_request.allowed_merge_methods` | squash, rebase | squash, rebase |
+| `required_status_checks.strict_required_status_checks_policy` | ON (branches up-to-date before merge) | ON |
+| Required checks (API contexts — job names only, not `workflow / job`) | Lint backend (ruff) / Lint frontend (ESLint) / Test backend (pytest) / Build frontend (Vite) / **Gitleaks (CLI)** | Lint backend (ruff) / Lint frontend (ESLint) / Test backend (pytest) / Build frontend (Vite) |
+| `bypass_actors` | one Integration (actor_id 3008410) — kept so the auto-bot can push tag bumps to `helm/env/dev.yaml` from `build-dev.yml::update-tag` | empty |
+
+Approvals stay at **0** because the project is solo today; status checks already gate. Bump to `1` (and add yourself as a bypass actor, or wait for the second collaborator) when the team grows.
+
+`required_linear_history` only applies to `main` because we want a clean linear release history when prod releases start landing there. `develop` allows non-linear-history-but-squash-merged PRs to keep the integration branch ergonomics intact.
+
+The Gitleaks check is required only on `develop` because the secret-scan workflow runs on every PR to develop/main + every push (#80) — by the time a PR reaches main from develop it has already passed Gitleaks once.
+
+If a future workflow needs to push directly to `main` (e.g., a release-promotion workflow that tags `vX.Y.Z` from `develop@HEAD`), add its GitHub App as a bypass actor on `main-protection` — same pattern as develop's tag-bump bot.
 
 ## CI gotchas worth remembering
 
 - **Pushes from `GITHUB_TOKEN` don't fire downstream workflows.** GitHub suppresses them as loop prevention. So any workflow that pushes a tag/commit and expects another workflow to react (e.g. `tag-qa-release.yml` → `build-qa.yml::on.push.tags`) MUST author the push with the GitHub App token (`TT_APP_ID` / `TT_APP_PRIVATE_KEY`), wired through `actions/checkout`'s `token:` so subsequent `git push` runs under App credentials. `build-dev.yml::update-tag`, `build-qa.yml::update-tag`, and `tag-qa-release.yml` all follow this pattern. We hit this on the first run after #85 (PR #100 fix).
 - **`paths-ignore` + required status checks = catch-22.** The `develop-merge-protection` ruleset requires `Lint backend / Lint frontend / Test backend / Build frontend` to pass. If `ci.yml`'s `paths-ignore` is broad enough that a PR touches ONLY ignored paths, CI skips entirely → required checks never report → mergeStateStatus=BLOCKED. Resolved in #92 (removed `.github/workflows/**`) and #103 (removed `helm/env/**`). `ci.yml` now has no `paths-ignore` — every PR runs CI. Auto-bot tag bumps to `helm/env/**` are direct pushes to develop, never PRs, so PR-time filtering never helped them anyway.
 - **Multi-arch + GHCR cleanup race.** `actions/delete-package-versions@v5` is not manifest-list-aware. Each platform child of a multi-arch manifest list shows up as a separate "package version" sorted by `created_at`. With low retention (we had `min-versions-to-keep: 15`) and a busy day of merges, the cleanup will eventually delete a platform child of a still-needed manifest list, leaving it un-pullable on that arch. Hit on the cluster's arm64 nodes during the post-#102 build (incident: #103). Mitigation: bumped retention to 90 (≈30 multi-arch builds, ≈3 days at 10 builds/day) which delays the race by an order of magnitude. Long-term fix is a manifest-list-aware cleanup (e.g. enumerate tags, find their referenced child digests, build an explicit "do not delete" set), tracked as a follow-up issue.
+- **Required-check context name vs UI display name.** The GitHub UI shows checks as `<Workflow name> / <Job name>` (e.g. `Secret scan / Gitleaks (CLI)`), but the **API context** that goes in `required_status_checks[].context` is just the job name (`Gitleaks (CLI)`). Set the wrong one and the ruleset shows "Expected — Waiting for status to be reported" forever, even though the check actually ran and passed. Verify against `gh api repos/:owner/:repo/commits/<sha>/check-runs -q '.check_runs[].name'` — that's the truth. Hit when bootstrapping the Gitleaks required gate in #118 (initial commit used the UI display name; fixed in the same PR after a refresh on the screenshot showed it stuck pending).
 - **Trailing newlines in GitHub Secrets break CF Access service tokens.** `gh secret set NAME` (interactive) and the web UI both store the trailing `\n` from the user pressing Enter. Curl in CI then sends `<value>\n` in the header; CF Access compares byte-for-byte and returns 403 silently. The token's "Last Seen" never updates, which is the diagnostic — if a freshly set service token shows "Not Seen Yet" after a smoke run, the secret almost certainly has a trailing newline. Set with `gh secret set NAME --body "$VAL"` (the `--body` flag never appends a newline) or `printf '%s' "$VAL" | gh secret set NAME`. The smoke E2E job in `build-qa.yml` now strips whitespace from both `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET` defensively and logs their trimmed lengths (id=39, secret=64) so the next occurrence is instantly diagnosable.
 
 ## QA validation
