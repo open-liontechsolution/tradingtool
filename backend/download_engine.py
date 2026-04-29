@@ -40,17 +40,28 @@ def _now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
 
+# Epoch (1970-01-01) was a Thursday; the first Monday after epoch is 1970-01-05.
+# Used to align 1w boundaries with Binance's Monday 00:00 UTC weekly candles.
+_MONDAY_EPOCH_OFFSET_MS = 4 * 86_400_000
+
+
 def _expected_open_times(start_ms: int, end_ms: int, interval: str) -> list[int]:
     """
     Generate the list of expected candle open_time values for a given range.
-    For 1M intervals, we approximate at 30 days.
+
+    Binance aligns 1w candles to Monday 00:00 UTC and 1M candles to the
+    calendar 1st 00:00 UTC; both deviate from a naive epoch-modulo step,
+    so they need bespoke alignment instead of `(start_ms // step) * step`.
     """
+    if interval == "1M":
+        return _expected_open_times_monthly(start_ms, end_ms)
+
     step = INTERVAL_MS.get(interval)
     if step is None:
         raise ValueError(f"Unknown interval: {interval}")
 
-    # Align start to interval boundary
-    aligned_start = (start_ms // step) * step
+    offset = _MONDAY_EPOCH_OFFSET_MS if interval == "1w" else 0
+    aligned_start = ((start_ms - offset) // step) * step + offset
     if aligned_start < start_ms:
         aligned_start += step
 
@@ -60,6 +71,27 @@ def _expected_open_times(start_ms: int, end_ms: int, interval: str) -> list[int]
         times.append(t)
         t += step
     return times
+
+
+def _expected_open_times_monthly(start_ms: int, end_ms: int) -> list[int]:
+    """Enumerate calendar-month open_time values (1st of each month, 00:00 UTC) in [start_ms, end_ms)."""
+    start_dt = datetime.fromtimestamp(start_ms / 1000, tz=UTC)
+    aligned = datetime(start_dt.year, start_dt.month, 1, tzinfo=UTC)
+    if int(aligned.timestamp() * 1000) < start_ms:
+        aligned = _next_month(aligned)
+
+    times: list[int] = []
+    t = aligned
+    while int(t.timestamp() * 1000) < end_ms:
+        times.append(int(t.timestamp() * 1000))
+        t = _next_month(t)
+    return times
+
+
+def _next_month(dt: datetime) -> datetime:
+    if dt.month == 12:
+        return dt.replace(year=dt.year + 1, month=1)
+    return dt.replace(month=dt.month + 1)
 
 
 async def _get_existing_open_times(
@@ -351,12 +383,19 @@ async def ensure_candles(symbol: str, interval: str, start_ms: int, end_ms: int)
     if key in _syncing:
         return False
 
-    # Check whether the last required candle (end_ms - step) is present
-    step_ms = INTERVAL_MS.get(interval)
-    if step_ms is None:
+    if interval not in INTERVAL_MS:
         raise ValueError(f"Unknown interval: {interval}")
 
-    last_required = end_ms - step_ms  # open_time of the last candle we need
+    # Derive the last expected candle from the alignment-aware generator —
+    # `end_ms - step_ms` only matches when end_ms sits exactly on a Binance
+    # boundary, which fails for 1w (Monday) and 1M (calendar) intervals.
+    expected_times = _expected_open_times(start_ms, end_ms, interval)
+    expected_count = len(expected_times)
+    if expected_count == 0:
+        _verified_ranges[key] = end_ms
+        return True
+
+    last_required = expected_times[-1]
 
     async with get_db() as db:
         cursor = await db.execute(
@@ -366,14 +405,11 @@ async def ensure_candles(symbol: str, interval: str, start_ms: int, end_ms: int)
         row = await cursor.fetchone()
         actual_count = row[0] if row else 0
 
-        # Also check the critical last candle is there
         cursor2 = await db.execute(
             "SELECT 1 FROM klines WHERE symbol=? AND interval=? AND open_time=?",
             (symbol, interval, last_required),
         )
         has_last = await cursor2.fetchone() is not None
-
-    expected_count = len(_expected_open_times(start_ms, end_ms, interval))
 
     if has_last and actual_count >= expected_count:
         # All candles present — update cache

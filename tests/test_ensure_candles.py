@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -12,6 +13,7 @@ import pytest
 from backend.database import get_db, init_db
 from backend.download_engine import (
     INTERVAL_MS,
+    _expected_open_times,
     _syncing,
     _verified_ranges,
     ensure_candles,
@@ -141,6 +143,38 @@ class TestEnsureCandlesDataPresent:
 
         assert result is False
         mock_task.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Tests: alignment regression for 1w / 1M (issue #134)
+# ---------------------------------------------------------------------------
+
+
+class TestEnsureCandlesAlignment:
+    @pytest.mark.asyncio
+    async def test_1w_returns_true_with_monday_aligned_data(self):
+        """Regression for #134: end_ms not on a Monday boundary should still
+        recognise a fully-populated DB without relaunching syncs forever."""
+        await init_db()
+        start_ms = int(datetime(2024, 1, 1, tzinfo=UTC).timestamp() * 1000)
+        end_ms = int(datetime(2024, 2, 18, tzinfo=UTC).timestamp() * 1000)  # a Sunday
+
+        await _insert_candles("BTCUSDT", "1w", _expected_open_times(start_ms, end_ms, "1w"))
+
+        result = await ensure_candles("BTCUSDT", "1w", start_ms, end_ms)
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_1M_returns_true_with_calendar_aligned_data(self):
+        """Regression for #134: 1M candles align to the calendar 1st, not 30-day chunks."""
+        await init_db()
+        start_ms = int(datetime(2023, 1, 1, tzinfo=UTC).timestamp() * 1000)
+        end_ms = int(datetime(2024, 1, 15, tzinfo=UTC).timestamp() * 1000)
+
+        await _insert_candles("BTCUSDT", "1M", _expected_open_times(start_ms, end_ms, "1M"))
+
+        result = await ensure_candles("BTCUSDT", "1M", start_ms, end_ms)
+        assert result is True
 
 
 # ---------------------------------------------------------------------------
