@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from datetime import UTC, datetime
 
 import aiosqlite
 import pytest
@@ -16,6 +17,11 @@ from backend.download_engine import (
     _get_existing_open_times,
     _upsert_candles,
 )
+
+
+def _ms(year: int, month: int, day: int) -> int:
+    return int(datetime(year, month, day, tzinfo=UTC).timestamp() * 1000)
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -111,6 +117,58 @@ class TestExpectedOpenTimes:
     def test_unknown_interval_raises(self):
         with pytest.raises(ValueError, match="Unknown interval"):
             _expected_open_times(0, 1_000_000, "99x")
+
+    def test_1w_monday_alignment(self):
+        # Range starts mid-week (Wed 2024-01-03) — first expected candle should
+        # be Mon 2024-01-08, not the Thursday-anchored snap of the old code.
+        start = _ms(2024, 1, 3)
+        end = _ms(2024, 2, 6)
+        times = _expected_open_times(start, end, "1w")
+        assert times == [
+            _ms(2024, 1, 8),
+            _ms(2024, 1, 15),
+            _ms(2024, 1, 22),
+            _ms(2024, 1, 29),
+            _ms(2024, 2, 5),
+        ]
+        for ts in times:
+            assert datetime.fromtimestamp(ts / 1000, tz=UTC).strftime("%A") == "Monday"
+
+    def test_1w_start_on_monday(self):
+        start = _ms(2024, 1, 1)  # Monday
+        end = _ms(2024, 1, 22)
+        times = _expected_open_times(start, end, "1w")
+        assert times == [_ms(2024, 1, 1), _ms(2024, 1, 8), _ms(2024, 1, 15)]
+
+    def test_1M_calendar_months(self):
+        # Mid-month start should snap up to the 1st of next month, then enumerate
+        # by calendar month (28/29/30/31 days), not 30-day fixed steps.
+        start = _ms(2024, 1, 15)
+        end = _ms(2024, 6, 1)
+        times = _expected_open_times(start, end, "1M")
+        assert times == [
+            _ms(2024, 2, 1),
+            _ms(2024, 3, 1),
+            _ms(2024, 4, 1),
+            _ms(2024, 5, 1),
+        ]
+
+    def test_1M_aligned_start_includes_first(self):
+        start = _ms(2024, 1, 1)
+        end = _ms(2024, 4, 1)
+        times = _expected_open_times(start, end, "1M")
+        assert times == [_ms(2024, 1, 1), _ms(2024, 2, 1), _ms(2024, 3, 1)]
+
+    def test_1M_year_boundary(self):
+        start = _ms(2023, 11, 1)
+        end = _ms(2024, 3, 1)
+        times = _expected_open_times(start, end, "1M")
+        assert times == [
+            _ms(2023, 11, 1),
+            _ms(2023, 12, 1),
+            _ms(2024, 1, 1),
+            _ms(2024, 2, 1),
+        ]
 
 
 # ---------------------------------------------------------------------------
