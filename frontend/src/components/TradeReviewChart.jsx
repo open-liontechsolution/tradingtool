@@ -55,6 +55,12 @@ export default function TradeReviewChart({ symbol, interval, startMs, endMs, tra
           crosshair: {
             mode: 0,
           },
+          // Pin the locale so axis tick formatting never depends on
+          // navigator.language, which can be malformed in headless / test
+          // browsers and crash Intl.DateTimeFormat on every animation frame.
+          localization: {
+            locale: 'en-US',
+          },
           timeScale: {
             timeVisible: true,
             secondsVisible: false,
