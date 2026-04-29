@@ -19,6 +19,10 @@ htmlcov/
 /tmp/test_results*.txt
 /tmp/build*.txt
 
+# Local research scratch (strategy sweeps, NDJSON, scratch scripts).
+# All artifacts under this folder are regenerable and stay local.
+/tmp/strategy_research/
+
 # Database / data files
 data/*.db
 data/*.db-wal

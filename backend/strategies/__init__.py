@@ -5,8 +5,11 @@ from __future__ import annotations
 from backend.strategies.base import Strategy
 from backend.strategies.breakout import BreakoutStrategy
 from backend.strategies.breakout_trailing import BreakoutTrailingStrategy
+from backend.strategies.donchian_adx_atr import DonchianAdxAtrStrategy
+from backend.strategies.donchian_long_term import DonchianLongTermStrategy
 from backend.strategies.support_resistance import SupportResistanceStrategy
 from backend.strategies.support_resistance_trailing import SupportResistanceTrailingStrategy
+from backend.strategies.zigzag_momentum import ZigzagMomentumStrategy
 
 _REGISTRY: dict[str, type[Strategy]] = {}
 
@@ -19,6 +22,9 @@ _register(BreakoutStrategy)
 _register(BreakoutTrailingStrategy)
 _register(SupportResistanceStrategy)
 _register(SupportResistanceTrailingStrategy)
+_register(DonchianAdxAtrStrategy)
+_register(DonchianLongTermStrategy)
+_register(ZigzagMomentumStrategy)
 
 
 def get_strategy(name: str) -> Strategy:

@@ -353,6 +353,46 @@ _STRATEGY_PARAMS = {
         "habilitar_short": True,
         "coste_total_bps": 0.0,
     },
+    "donchian_adx_atr": {
+        "donchian_n": 20,
+        "donchian_exit_n": 80,
+        "adx_period": 14,
+        "adx_threshold": 0.0,  # disabled in parity to guarantee enough trades
+        "atr_period": 14,
+        "atr_stop_mult": 1.5,
+        "atr_trail_mult": 8.0,
+        "modo_ejecucion": "close_current",
+        "habilitar_long": True,
+        "habilitar_short": True,
+        "salida_por_ruptura": True,
+        "coste_total_bps": 0.0,
+    },
+    "donchian_long_term": {
+        "donchian_n": 5,
+        "donchian_exit_n": 3,
+        "sma_filter_n": 0,
+        "trail_lookback": 10,
+        "atr_period": 14,
+        "atr_buffer_mult": 0.0,
+        "modo_ejecucion": "close_current",
+        "habilitar_long": True,
+        "habilitar_short": True,
+        "salida_por_ruptura": True,
+        "coste_total_bps": 0.0,
+    },
+    "zigzag_momentum": {
+        "reversal_pct": 0.03,
+        "rsi_period": 14,
+        "rsi_long_threshold": 0.0,  # disabled to guarantee enough trades
+        "rsi_short_threshold": 100.0,  # disabled
+        "atr_period": 14,
+        "atr_buffer_mult": 1.5,
+        "modo_ejecucion": "close_current",
+        "habilitar_long": True,
+        "habilitar_short": True,
+        "salida_por_ruptura": True,
+        "coste_total_bps": 0.0,
+    },
 }
 
 
