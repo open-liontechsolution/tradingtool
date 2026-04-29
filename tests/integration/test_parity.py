@@ -393,6 +393,21 @@ _STRATEGY_PARAMS = {
         "salida_por_ruptura": True,
         "coste_total_bps": 0.0,
     },
+    "mean_reversion_bb": {
+        "bb_period": 20,
+        "bb_std": 2.0,
+        "rsi_period": 14,
+        "rsi_oversold": 35.0,  # relaxed to ensure trades on parity slots
+        "rsi_overbought": 65.0,
+        "stop_pct": 0.05,
+        "salida_a_mean": True,
+        "salida_banda_opuesta": False,
+        "sma_filter_n": 0,
+        "modo_ejecucion": "close_current",
+        "habilitar_long": True,
+        "habilitar_short": True,
+        "coste_total_bps": 0.0,
+    },
 }
 
 

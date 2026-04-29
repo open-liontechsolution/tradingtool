@@ -7,6 +7,7 @@ from backend.strategies.breakout import BreakoutStrategy
 from backend.strategies.breakout_trailing import BreakoutTrailingStrategy
 from backend.strategies.donchian_adx_atr import DonchianAdxAtrStrategy
 from backend.strategies.donchian_long_term import DonchianLongTermStrategy
+from backend.strategies.mean_reversion_bb import MeanReversionBBStrategy
 from backend.strategies.support_resistance import SupportResistanceStrategy
 from backend.strategies.support_resistance_trailing import SupportResistanceTrailingStrategy
 from backend.strategies.zigzag_momentum import ZigzagMomentumStrategy
@@ -25,6 +26,7 @@ _register(SupportResistanceTrailingStrategy)
 _register(DonchianAdxAtrStrategy)
 _register(DonchianLongTermStrategy)
 _register(ZigzagMomentumStrategy)
+_register(MeanReversionBBStrategy)
 
 
 def get_strategy(name: str) -> Strategy:
