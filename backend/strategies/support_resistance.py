@@ -34,6 +34,14 @@ class SupportResistanceStrategy(Strategy):
             ),
             ParameterDef("habilitar_long", "bool", True, None, None, "Enable long entries"),
             ParameterDef("habilitar_short", "bool", True, None, None, "Enable short entries"),
+            ParameterDef(
+                "exit_confirmation_candles",
+                "int",
+                1,
+                1,
+                10,
+                "Consecutive closed candles below the support (long) / above the resistance (short) required to confirm the exit. 1 = original single-candle exit; >1 reduces whipsaws but lags exits.",
+            ),
             ParameterDef("coste_total_bps", "float", 10.0, 0.0, 100.0, "Round-trip transaction cost in basis points"),
         ]
 
@@ -114,11 +122,31 @@ class SupportResistanceStrategy(Strategy):
         self.last_resistance = resistance
         self.candles = candles
 
+    def _exit_confirmed_sr(self, t: int, side: str, n_confirm: int) -> bool:
+        """Multi-candle confirmation: last N closed candles all on the wrong
+        side of their respective zigzag level. n_confirm <= 1 ⇒ False (caller
+        handles single-candle path)."""
+        if n_confirm <= 1 or t < n_confirm - 1:
+            return False
+        for k in range(n_confirm):
+            idx = t - k
+            c_close = float(self.candles.iloc[idx]["close"])
+            if side == "long":
+                ref = self.last_support[idx]
+                if np.isnan(ref) or c_close >= float(ref):
+                    return False
+            else:  # short
+                ref = self.last_resistance[idx]
+                if np.isnan(ref) or c_close <= float(ref):
+                    return False
+        return True
+
     def on_candle(self, t: int, candle: pd.Series, state: PositionState) -> list[Signal]:
         params = self.params
         habilitar_long = bool(params.get("habilitar_long", True))
         habilitar_short = bool(params.get("habilitar_short", True))
         stop_pct = float(params.get("stop_pct", 0.02))
+        n_confirm = max(1, int(params.get("exit_confirmation_candles", 1)))
 
         signals: list[Signal] = []
 
@@ -138,8 +166,12 @@ class SupportResistanceStrategy(Strategy):
             if low <= state.stop_price:
                 signals.append(Signal(action="stop_long", price=state.stop_price))
                 return signals
-            # Check exit: close breaks below support
-            if close < support:
+            # Check exit: close breaks below support (single or multi-candle)
+            if n_confirm == 1:
+                if close < support:
+                    signals.append(Signal(action="exit_long", price=close))
+                    return signals
+            elif self._exit_confirmed_sr(t, "long", n_confirm):
                 signals.append(Signal(action="exit_long", price=close))
                 return signals
 
@@ -148,8 +180,12 @@ class SupportResistanceStrategy(Strategy):
             if high >= state.stop_price:
                 signals.append(Signal(action="stop_short", price=state.stop_price))
                 return signals
-            # Check exit: close breaks above resistance
-            if close > resistance:
+            # Check exit: close breaks above resistance (single or multi-candle)
+            if n_confirm == 1:
+                if close > resistance:
+                    signals.append(Signal(action="exit_short", price=close))
+                    return signals
+            elif self._exit_confirmed_sr(t, "short", n_confirm):
                 signals.append(Signal(action="exit_short", price=close))
                 return signals
 

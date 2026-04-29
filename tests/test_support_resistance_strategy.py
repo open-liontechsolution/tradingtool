@@ -391,6 +391,7 @@ class TestParameterDefs:
             "modo_ejecucion",
             "habilitar_long",
             "habilitar_short",
+            "exit_confirmation_candles",
             "coste_total_bps",
         }
         assert expected == names
