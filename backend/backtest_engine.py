@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass, field
 
@@ -38,16 +39,34 @@ async def run_backtest(
 ) -> BacktestResult:
     """
     Run a backtest for a given symbol/interval/range using the specified strategy.
+
+    The async wrapper handles the DB read; the synchronous compute path runs in
+    a thread (``asyncio.to_thread``) so the event loop keeps serving /healthz
+    and other requests while the backtest is iterating candles. Without this
+    split, large backtests (≥10k candles, or any strategy with a Python loop in
+    init() like the zigzag-based ones) block the loop for tens of seconds and
+    trip the liveness probe → SIGKILL (post-#132).
     """
     result = BacktestResult()
 
-    # Load candles
     df = await load_candles_df(symbol, interval, start_ms, end_ms)
     if df.empty or len(df) < 2:
         result.error = "Insufficient candle data for backtest"
         return result
 
-    # Initialize strategy
+    return await asyncio.to_thread(_run_backtest_compute, df, interval, strategy_name, params, initial_capital)
+
+
+def _run_backtest_compute(
+    df: pd.DataFrame,
+    interval: str,
+    strategy_name: str,
+    params: dict,
+    initial_capital: float,
+) -> BacktestResult:
+    """Synchronous core: strategy init + candle iteration. Always run in a thread."""
+    result = BacktestResult()
+
     try:
         strategy = get_strategy(strategy_name)
         strategy.init(params, df)

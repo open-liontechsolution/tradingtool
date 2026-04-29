@@ -32,12 +32,16 @@ config:
   CORS_ORIGINS: "*"
 
 resources:
+  # Bumped post-#132: backtests over multi-year intraday windows (10k+ candles)
+  # plus the new strategies push memory + CPU past the previous 512Mi/500m
+  # ceiling. The asyncio.to_thread split in run_backtest fixes the event-loop
+  # block, but the underlying compute still needs more headroom.
   requests:
     cpu: 100m
-    memory: 128Mi
+    memory: 256Mi
   limits:
-    cpu: 500m
-    memory: 512Mi
+    cpu: 1000m
+    memory: 1Gi
 
 # Schedule app pods only on worker nodes by default. k3s does not taint
 # control-plane nodes, so without this hint the scheduler is happy to

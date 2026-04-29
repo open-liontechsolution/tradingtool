@@ -46,22 +46,28 @@ spec:
                 name: {{ include "tradingtools.configmapName" . }}
             - secretRef:
                 name: {{ .Values.existingSecret }}
+          # Probe tolerances bumped post-#132. Even with run_backtest moved
+          # off the event loop via asyncio.to_thread, GC pauses and short
+          # bursts during init() of Python-loop-based strategies can briefly
+          # delay /healthz. The previous 5s × 3 = ~50s ceiling killed the pod
+          # under load; ~150s (30s × 5) is a safer envelope and still catches
+          # genuine hangs within a few minutes.
           livenessProbe:
             httpGet:
               path: /healthz
               port: http
             initialDelaySeconds: 10
-            periodSeconds: 15
-            timeoutSeconds: 5
-            failureThreshold: 3
+            periodSeconds: 30
+            timeoutSeconds: 30
+            failureThreshold: 5
           readinessProbe:
             httpGet:
               path: /readyz
               port: http
             initialDelaySeconds: 10
-            periodSeconds: 10
-            timeoutSeconds: 5
-            failureThreshold: 3
+            periodSeconds: 15
+            timeoutSeconds: 15
+            failureThreshold: 5
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           volumeMounts:
