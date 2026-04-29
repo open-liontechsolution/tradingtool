@@ -334,6 +334,7 @@ class TestParameterDefs:
             "habilitar_short",
             "salida_por_ruptura",
             "exit_confirmation_candles",
+            "sma_filter_n",
             "coste_total_bps",
         }
         assert expected == names

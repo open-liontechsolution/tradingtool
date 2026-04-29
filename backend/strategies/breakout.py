@@ -44,6 +44,14 @@ class BreakoutStrategy(Strategy):
                 10,
                 "Consecutive closed candles below the M-extreme required to confirm exit. 1 = current behaviour (single-candle exit). >1 reduces whipsaws but lags exits.",
             ),
+            ParameterDef(
+                "sma_filter_n",
+                "int",
+                0,
+                0,
+                500,
+                "Higher-TF SMA trend filter length. 0 disables (legacy). When >0, longs require close > SMA(N), shorts close < SMA(N). Stops major counter-trend trades in regime markets.",
+            ),
             ParameterDef("coste_total_bps", "float", 10.0, 0.0, 100.0, "Round-trip transaction cost in basis points"),
         ]
 
@@ -51,6 +59,7 @@ class BreakoutStrategy(Strategy):
         self.params = params
         n = int(params.get("N_entrada", 20))
         m = int(params.get("M_salida", 10))
+        sma_n = int(params.get("sma_filter_n", 0))
 
         # MaxPrev(t) = max(High) of N candles BEFORE t (exclusive)
         # Using shift(1) so that at time t we look at [t-N, t-1]
@@ -60,6 +69,9 @@ class BreakoutStrategy(Strategy):
         # Exit levels: min/max of M candles before t (exclusive)
         self.min_exit = candles["low"].shift(1).rolling(m).min()
         self.max_exit = candles["high"].shift(1).rolling(m).max()
+
+        # Optional HTF SMA trend filter (shifted so we use values up to t-1)
+        self.sma_prev = candles["close"].shift(1).rolling(sma_n).mean() if sma_n > 0 else None
 
         self.candles = candles
 
@@ -142,11 +154,21 @@ class BreakoutStrategy(Strategy):
 
         # Entry signals (only when flat)
         if state.side == "flat":
-            if habilitar_long and close > max_prev:
+            # Optional HTF SMA trend filter
+            long_regime_ok = True
+            short_regime_ok = True
+            if self.sma_prev is not None:
+                sma = self.sma_prev.iloc[t]
+                if pd.isna(sma):
+                    return signals  # warm-up not done yet
+                long_regime_ok = close > float(sma)
+                short_regime_ok = close < float(sma)
+
+            if habilitar_long and long_regime_ok and close > max_prev:
                 stop_long = min_prev * (1.0 - stop_pct)
                 signals.append(Signal(action="entry_long", price=close, stop_price=stop_long))
 
-            elif habilitar_short and close < min_prev:
+            elif habilitar_short and short_regime_ok and close < min_prev:
                 stop_short = max_prev * (1.0 + stop_pct)
                 signals.append(Signal(action="entry_short", price=close, stop_price=stop_short))
 

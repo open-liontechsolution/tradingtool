@@ -42,6 +42,14 @@ class SupportResistanceStrategy(Strategy):
                 10,
                 "Consecutive closed candles below the support (long) / above the resistance (short) required to confirm the exit. 1 = original single-candle exit; >1 reduces whipsaws but lags exits.",
             ),
+            ParameterDef(
+                "sma_filter_n",
+                "int",
+                0,
+                0,
+                500,
+                "Higher-TF SMA trend filter length. 0 disables (legacy). When >0, longs require close > SMA(N), shorts close < SMA(N). Stops major counter-trend trades in regime markets.",
+            ),
             ParameterDef("coste_total_bps", "float", 10.0, 0.0, 100.0, "Round-trip transaction cost in basis points"),
         ]
 
@@ -113,6 +121,7 @@ class SupportResistanceStrategy(Strategy):
     def init(self, params: dict, candles: pd.DataFrame) -> None:
         self.params = params
         reversal_pct = float(params.get("reversal_pct", 0.03))
+        sma_n = int(params.get("sma_filter_n", 0))
 
         highs = candles["high"].to_numpy(dtype=float)
         lows = candles["low"].to_numpy(dtype=float)
@@ -120,6 +129,10 @@ class SupportResistanceStrategy(Strategy):
         support, resistance = self._compute_zigzag(highs, lows, reversal_pct)
         self.last_support = support
         self.last_resistance = resistance
+
+        # Optional HTF SMA trend filter (shifted so we use values up to t-1)
+        self.sma_prev = candles["close"].shift(1).rolling(sma_n).mean() if sma_n > 0 else None
+
         self.candles = candles
 
     def _exit_confirmed_sr(self, t: int, side: str, n_confirm: int) -> bool:
@@ -191,11 +204,21 @@ class SupportResistanceStrategy(Strategy):
 
         # Entry signals (only when flat)
         if state.side == "flat":
-            if habilitar_long and close > resistance:
+            # Optional HTF SMA trend filter
+            long_regime_ok = True
+            short_regime_ok = True
+            if self.sma_prev is not None:
+                sma = self.sma_prev.iloc[t]
+                if pd.isna(sma):
+                    return signals  # warm-up not done yet
+                long_regime_ok = close > float(sma)
+                short_regime_ok = close < float(sma)
+
+            if habilitar_long and long_regime_ok and close > resistance:
                 stop_long = support * (1.0 - stop_pct)
                 signals.append(Signal(action="entry_long", price=close, stop_price=stop_long))
 
-            elif habilitar_short and close < support:
+            elif habilitar_short and short_regime_ok and close < support:
                 stop_short = resistance * (1.0 + stop_pct)
                 signals.append(Signal(action="entry_short", price=close, stop_price=stop_short))
 
