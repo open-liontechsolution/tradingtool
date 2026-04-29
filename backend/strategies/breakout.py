@@ -36,6 +36,14 @@ class BreakoutStrategy(Strategy):
                 None,
                 "Exit on reversal breakout (close vs M-candle extreme). When False, only stop-loss closes the trade.",
             ),
+            ParameterDef(
+                "exit_confirmation_candles",
+                "int",
+                1,
+                1,
+                10,
+                "Consecutive closed candles below the M-extreme required to confirm exit. 1 = current behaviour (single-candle exit). >1 reduces whipsaws but lags exits.",
+            ),
             ParameterDef("coste_total_bps", "float", 10.0, 0.0, 100.0, "Round-trip transaction cost in basis points"),
         ]
 
@@ -55,12 +63,38 @@ class BreakoutStrategy(Strategy):
 
         self.candles = candles
 
+    def _exit_confirmed(self, t: int, side: str, n_confirm: int) -> bool:
+        """Return True when the last `n_confirm` consecutive closed candles
+        all sit on the wrong side of their respective M-exit channel.
+
+        n_confirm=1 collapses to the original single-candle check.
+        """
+        if n_confirm <= 1:
+            # Caller will do the single-candle check directly; this is just a
+            # convenience for the multi-candle path.
+            return False
+        if t < n_confirm - 1:
+            return False
+        for k in range(n_confirm):
+            idx = t - k
+            c_close = float(self.candles.iloc[idx]["close"])
+            if side == "long":
+                ref = self.min_exit.iloc[idx]
+                if pd.isna(ref) or c_close >= float(ref):
+                    return False
+            else:  # short
+                ref = self.max_exit.iloc[idx]
+                if pd.isna(ref) or c_close <= float(ref):
+                    return False
+        return True
+
     def on_candle(self, t: int, candle: pd.Series, state: PositionState) -> list[Signal]:
         params = self.params
         habilitar_long = bool(params.get("habilitar_long", True))
         habilitar_short = bool(params.get("habilitar_short", True))
         stop_pct = float(params.get("stop_pct", 0.02))
         salida_por_ruptura = bool(params.get("salida_por_ruptura", True))
+        n_confirm = max(1, int(params.get("exit_confirmation_candles", 1)))
 
         signals: list[Signal] = []
 
@@ -81,20 +115,30 @@ class BreakoutStrategy(Strategy):
             if low <= state.stop_price:
                 signals.append(Signal(action="stop_long", price=state.stop_price))
                 return signals
-            # Check exit on close
-            if salida_por_ruptura and close < min_exit:
-                signals.append(Signal(action="exit_long", price=close))
-                return signals
+            # Check exit on close (single or multi-candle confirmation)
+            if salida_por_ruptura:
+                if n_confirm == 1:
+                    if close < min_exit:
+                        signals.append(Signal(action="exit_long", price=close))
+                        return signals
+                elif self._exit_confirmed(t, "long", n_confirm):
+                    signals.append(Signal(action="exit_long", price=close))
+                    return signals
 
         elif state.side == "short":
             # Check stop loss (intrabar: triggered on High)
             if high >= state.stop_price:
                 signals.append(Signal(action="stop_short", price=state.stop_price))
                 return signals
-            # Check exit on close
-            if salida_por_ruptura and close > max_exit:
-                signals.append(Signal(action="exit_short", price=close))
-                return signals
+            # Check exit on close (single or multi-candle confirmation)
+            if salida_por_ruptura:
+                if n_confirm == 1:
+                    if close > max_exit:
+                        signals.append(Signal(action="exit_short", price=close))
+                        return signals
+                elif self._exit_confirmed(t, "short", n_confirm):
+                    signals.append(Signal(action="exit_short", price=close))
+                    return signals
 
         # Entry signals (only when flat)
         if state.side == "flat":

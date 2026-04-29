@@ -333,6 +333,7 @@ class TestParameterDefs:
             "habilitar_long",
             "habilitar_short",
             "salida_por_ruptura",
+            "exit_confirmation_candles",
             "coste_total_bps",
         }
         assert expected == names
