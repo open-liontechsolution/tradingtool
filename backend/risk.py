@@ -51,6 +51,12 @@ def compute_risk_based_size(
         raise ValueError(f"entry_price must be > 0, got {entry_price}")
     if current_portfolio <= 0:
         raise ValueError(f"current_portfolio must be > 0, got {current_portfolio}")
+    if max_loss_pct <= 0:
+        # max_loss_pct=0 would silently produce invested=0/qty=0 (no-op trade
+        # that occupies the active slot). Reject so the caller — and ultimately
+        # the pydantic Field(gt=0) on signal_configs.max_loss_per_trade_pct —
+        # surface the misuse instead of opening a degenerate position.
+        raise ValueError(f"max_loss_pct must be > 0 in risk_based sizing, got {max_loss_pct}")
     distance = abs(entry_price - stop_base)
     if distance <= 0:
         raise ValueError(f"distance entry_price-stop_base must be > 0, got entry={entry_price} stop={stop_base}")

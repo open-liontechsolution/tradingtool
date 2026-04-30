@@ -23,7 +23,7 @@ const FIELD_TIPS = {
   costBps: 'Coste de transacción aplicado a cada lado del trade en basis points (1 bps = 0.01%). Binance ≈ 10 bps/lado.',
   maintenanceMargin: 'Margen de mantenimiento usado para calcular el precio de liquidación. Binance baseline ≈ 0.005 (0.5%) para notional bajo.',
   maxLossEnabled: 'Si está activo, descarta entradas cuya pérdida estimada (entry → stop, considerando el apalancamiento) supere el % de equity configurado.',
-  maxLossPct: 'Pérdida máxima permitida por trade como fracción del equity. E.g. 0.02 = "no abrir si la pérdida si salta el stop sería >2% del capital actual". Con leverage>1 escala automáticamente.',
+  maxLossPct: 'Doble rol según Position sizing: en full_equity es el umbral del skip filter (entradas con pérdida-si-stop > X% se descartan; sólo aplica si Max loss/trade está On). En risk_based es el target de pérdida-si-stop (la entrada se dimensiona para que la pérdida realizada iguale X%, capada por el leverage).',
   positionSizingMode: 'full_equity (legacy): cada entrada despliega current_portfolio × leverage. risk_based: la entrada se dimensiona para que, si salta el stop, la pérdida realizada iguale Max loss % (capada por el límite de leverage). En risk_based el campo Invested amount (capital fijo) se ignora.',
 }
 
@@ -96,11 +96,17 @@ export function ConfigForm({ strategies, onCreated }) {
   const visibleParams = (currentStrat?.parameters ?? []).filter(p => p.name !== 'coste_total_bps')
 
   const step1Valid = !!selectedStrat
+  // ``maxLossPct > 0`` is required whenever the value is actually applied:
+  // either when the skip filter is on (#142) or when sizing is risk-based
+  // (#144 → #147 — pct=0 would produce no-op trades). Pydantic enforces gt=0
+  // backend-side; this gate is just for UX so "Next →" disables before the
+  // 422 round-trip.
+  const maxLossActive = maxLossEnabled || positionSizingMode === 'risk_based'
   const step2Valid =
     portfolio > 0 &&
     maintenanceMarginPct >= 0 &&
     costBps >= 0 &&
-    (!maxLossEnabled || maxLossPct > 0) &&
+    (!maxLossActive || maxLossPct > 0) &&
     (capitalMode === 'leverage' ? leverage > 0 : investedAmount > 0)
 
   const summary = useMemo(() => ({
@@ -117,7 +123,11 @@ export function ConfigForm({ strategies, onCreated }) {
       ? `risk-based (target ${(maxLossPct * 100).toFixed(2)}% por trade)`
       : 'full equity',
     Portfolio: fmtMoney(portfolio),
-    ...(capitalMode === 'leverage'
+    // In risk_based the invested_amount is overridden by the sizing helper, so
+    // hide the "Invested amount" line even if the user managed to land on
+    // capitalMode='invested' (the auto-switch normally forces leverage when
+    // entering risk_based, but a stale state path could still get there).
+    ...(positionSizingMode === 'risk_based' || capitalMode === 'leverage'
       ? { Leverage: leverage > 1 ? `${leverage}× (liquidación calculada)` : `${leverage}× (sin apalancamiento)` }
       : { 'Invested amount': fmtMoney(investedAmount) }),
   }), [symbol, interval, selectedStrat, paramValues, costBps, maintenanceMarginPct, maxLossEnabled, maxLossPct, positionSizingMode, portfolio, leverage, investedAmount, capitalMode])
@@ -267,15 +277,32 @@ export function ConfigForm({ strategies, onCreated }) {
                 </div>
               </div>
               <div className="form-group">
-                <FieldLabel tooltip={FIELD_TIPS.maxLossPct}>Max loss % (equity)</FieldLabel>
+                <FieldLabel tooltip={FIELD_TIPS.maxLossPct}>
+                  {positionSizingMode === 'risk_based' ? 'Max loss % (target)' : 'Max loss % (skip threshold)'}
+                </FieldLabel>
                 <input type="number" className="form-control" value={maxLossPct} min={0} step={0.001}
                   onChange={e => setMaxLossPct(parseFloat(e.target.value) || 0)}
                   disabled={loading || (!maxLossEnabled && positionSizingMode !== 'risk_based')} />
+                {positionSizingMode !== 'risk_based' && !maxLossEnabled && (
+                  <div style={{ marginTop: '4px', fontSize: '0.72rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>
+                    (sin uso — activa Max loss/trade para aplicar el skip filter)
+                  </div>
+                )}
               </div>
               <div className="form-group" style={{ gridColumn: '1 / span 2' }}>
                 <FieldLabel tooltip={FIELD_TIPS.positionSizingMode}>Position sizing</FieldLabel>
                 <select className="form-control" value={positionSizingMode}
-                  onChange={e => setPositionSizingMode(e.target.value)} disabled={loading}>
+                  onChange={e => {
+                    const next = e.target.value
+                    setPositionSizingMode(next)
+                    // Auto-switch to leverage when entering risk_based (#149):
+                    // invested_amount is overridden in this mode, so the toggle
+                    // is locked to "Portfolio + Leverage". investedAmount state
+                    // is preserved for when the user switches back.
+                    if (next === 'risk_based' && capitalMode === 'invested') {
+                      setCapitalMode('leverage')
+                    }
+                  }} disabled={loading}>
                   <option value="full_equity">Full equity (legacy)</option>
                   <option value="risk_based">Risk-based (target Max loss %)</option>
                 </select>
@@ -297,6 +324,7 @@ export function ConfigForm({ strategies, onCreated }) {
               investedAmount={investedAmount} setInvestedAmount={setInvestedAmount}
               mode={capitalMode} setMode={setCapitalMode}
               disabled={loading}
+              lockMode={positionSizingMode === 'risk_based' ? 'leverage' : null}
             />
           </div>
         </div>
