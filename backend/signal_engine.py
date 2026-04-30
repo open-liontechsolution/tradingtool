@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 from backend.database import get_db
 from backend.download_engine import INTERVAL_MS, ensure_candles
 from backend.metrics_engine import load_candles_df
-from backend.risk import should_skip_for_max_loss
+from backend.risk import compute_risk_based_size, should_skip_for_max_loss
 from backend.strategies import get_strategy
 from backend.strategies.base import PositionState
 
@@ -147,25 +147,66 @@ async def _create_signal_and_sim_trade(
     side: str,
     trigger_candle_time: int,
     stop_price: float,
+    entry_price: float,
 ) -> int | None:
-    """Create a signal + sim_trade pair. Returns signal_id or None if dedup."""
+    """Create a signal + sim_trade pair. Returns signal_id or None if dedup.
+
+    ``entry_price`` is the trigger candle's close — the deterministic
+    reference price used for risk-based sizing (#144) and for the max-loss
+    skip filter (#142). Both engines anchor on the trigger close so backtest
+    and live agree on the sizing decision; the actual fill price (next open
+    in ``open_next`` mode) only affects the realised quantity downstream
+    (``_fill_pending_entries`` recomputes ``qty = invested / fill_price``).
+    """
     now = _now_iso()
 
     # Resolve sizing against the config's *current* portfolio (compounding).
     # ``sim_trades.portfolio`` is the snapshot at entry; ``current_portfolio``
     # on the config evolves as each closed trade applies its PnL.
     portfolio = float(config["current_portfolio"])
-    invested_amount = config["invested_amount"]
-    leverage = config["leverage"]
-    if invested_amount is not None:
-        invested_amount = float(invested_amount)
-        leverage = invested_amount / portfolio if portfolio > 0 else 1.0
-    elif leverage is not None:
-        leverage = float(leverage)
-        invested_amount = portfolio * leverage
+    sizing_mode = config.get("position_sizing_mode") or "full_equity"
+    sizing_clipped = False
+
+    if sizing_mode == "risk_based":
+        # In risk_based mode, ``invested_amount`` (fixed-notional capital
+        # mode) is overridden — the position is sized from the stop distance
+        # and the risk %. ``leverage`` still bounds the maximum notional via
+        # the helper's clip rule. ``max_loss_per_trade_pct`` is the target
+        # loss-if-stopped (NOT just the skip threshold) — see CLAUDE.md
+        # "Live-mode invariants" for the full interaction with #142.
+        leverage = float(config["leverage"]) if config.get("leverage") is not None else 1.0
+        risk_pct = float(config["max_loss_per_trade_pct"])
+        try:
+            invested_amount, _qty_at_trigger, sizing_clipped = compute_risk_based_size(
+                side=side,  # type: ignore[arg-type]
+                entry_price=entry_price,
+                stop_base=stop_price,
+                current_portfolio=portfolio,
+                max_loss_pct=risk_pct,
+                leverage=leverage,
+            )
+        except ValueError as exc:
+            logger.warning(
+                "Risk-based sizing skipped for config=%d candle=%d: %s",
+                config["id"],
+                trigger_candle_time,
+                exc,
+            )
+            return None
     else:
-        leverage = 1.0
-        invested_amount = portfolio
+        # Legacy ``full_equity`` mode: deploy the configured invested_amount
+        # (or current_portfolio * leverage). Identical to pre-#144 behaviour.
+        invested_amount = config["invested_amount"]
+        leverage = config["leverage"]
+        if invested_amount is not None:
+            invested_amount = float(invested_amount)
+            leverage = invested_amount / portfolio if portfolio > 0 else 1.0
+        elif leverage is not None:
+            leverage = float(leverage)
+            invested_amount = portfolio * leverage
+        else:
+            leverage = 1.0
+            invested_amount = portfolio
 
     async with get_db() as db:
         try:
@@ -196,10 +237,10 @@ async def _create_signal_and_sim_trade(
             """INSERT INTO sim_trades
                 (signal_id, config_id, symbol, interval, side,
                  stop_base, status,
-                 portfolio, invested_amount, leverage, fees,
+                 portfolio, invested_amount, leverage, sizing_clipped, fees,
                  created_at, updated_at)
                VALUES (?, ?, ?, ?, ?, ?, 'pending_entry',
-                       ?, ?, ?, ?, ?, ?)""",
+                       ?, ?, ?, ?, ?, ?, ?)""",
             (
                 signal_id,
                 config["id"],
@@ -210,6 +251,7 @@ async def _create_signal_and_sim_trade(
                 portfolio,
                 invested_amount,
                 leverage,
+                1 if sizing_clipped else 0,
                 0.0,
                 now,
                 now,
@@ -218,11 +260,13 @@ async def _create_signal_and_sim_trade(
         await db.commit()
 
     logger.info(
-        "Signal created: config=%d side=%s candle=%d stop=%.6f",
+        "Signal created: config=%d side=%s candle=%d stop=%.6f mode=%s clipped=%s",
         config["id"],
         side,
         trigger_candle_time,
         stop_price,
+        sizing_mode,
+        sizing_clipped,
     )
     return signal_id
 
@@ -362,6 +406,7 @@ async def scan_config(config: dict) -> None:
                 side=side,
                 trigger_candle_time=last_closed,
                 stop_price=sig.stop_price,
+                entry_price=float(candle["close"]),
             )
             break  # one signal per scan cycle
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
@@ -39,6 +39,7 @@ class SignalConfigCreate(BaseModel):
     telegram_enabled: bool = False
     max_loss_per_trade_enabled: bool = False
     max_loss_per_trade_pct: float = 0.02
+    position_sizing_mode: Literal["full_equity", "risk_based"] = "full_equity"
 
 
 class SignalConfigPatch(BaseModel):
@@ -52,6 +53,7 @@ class SignalConfigPatch(BaseModel):
     telegram_enabled: bool | None = None
     max_loss_per_trade_enabled: bool | None = None
     max_loss_per_trade_pct: float | None = None
+    position_sizing_mode: Literal["full_equity", "risk_based"] | None = None
 
 
 class RealTradeCreate(BaseModel):
@@ -111,9 +113,10 @@ async def create_signal_config(
                      invested_amount, leverage, cost_bps,
                      maintenance_margin_pct,
                      max_loss_per_trade_enabled, max_loss_per_trade_pct,
+                     position_sizing_mode,
                      polling_interval_s, active, telegram_enabled, last_processed_candle,
                      created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0, ?, ?)""",
                 (
                     user.id,
                     req.symbol.upper(),
@@ -128,6 +131,7 @@ async def create_signal_config(
                     req.maintenance_margin_pct,
                     1 if req.max_loss_per_trade_enabled else 0,
                     req.max_loss_per_trade_pct,
+                    req.position_sizing_mode,
                     req.polling_interval_s,
                     1 if req.telegram_enabled else 0,
                     now,
@@ -220,6 +224,9 @@ async def patch_signal_config(
     if req.max_loss_per_trade_pct is not None:
         fields.append("max_loss_per_trade_pct = ?")
         values.append(req.max_loss_per_trade_pct)
+    if req.position_sizing_mode is not None:
+        fields.append("position_sizing_mode = ?")
+        values.append(req.position_sizing_mode)
 
     if not fields:
         raise HTTPException(400, "No fields to update")

@@ -10,6 +10,65 @@ import math
 from typing import Literal
 
 
+def compute_risk_based_size(
+    *,
+    side: Literal["long", "short"],
+    entry_price: float,
+    stop_base: float,
+    current_portfolio: float,
+    max_loss_pct: float,
+    leverage: float,
+) -> tuple[float, float, bool]:
+    """Return ``(invested_amount, quantity, sizing_clipped)`` for a risk-based entry (#144).
+
+    Sizes the position so that, if the trade gets stopped at ``stop_base`` from
+    a fill at ``entry_price``, the realised loss equals
+    ``current_portfolio * max_loss_pct``. The leverage budget caps the result:
+    when the target notional exceeds ``current_portfolio * leverage`` it is
+    clipped (and ``sizing_clipped=True``), in which case the realised
+    loss-if-stopped will *exceed* ``max_loss_pct`` — that's exactly when #142's
+    skip filter remains useful as a safety net.
+
+    Formula::
+
+        distance        = abs(entry_price - stop_base)
+        risk_amount     = current_portfolio * max_loss_pct
+        target_qty      = risk_amount / distance
+        target_notional = target_qty * entry_price
+        max_notional    = current_portfolio * max(leverage, 1.0)
+        notional        = min(target_notional, max_notional)
+        quantity        = notional / entry_price
+        sizing_clipped  = (target_notional > max_notional)
+
+    Side-symmetric (``abs(...)`` on the distance). Caller must guarantee
+    ``entry_price > 0``, ``current_portfolio > 0`` and ``distance > 0`` —
+    these are all satisfied by any real entry signal (entry/stop are emitted
+    by a strategy on a closed candle with a non-zero price). Raises
+    ``ValueError`` on degenerate input so a misuse fails loud rather than
+    silently producing a zero-sized trade.
+    """
+    if entry_price <= 0:
+        raise ValueError(f"entry_price must be > 0, got {entry_price}")
+    if current_portfolio <= 0:
+        raise ValueError(f"current_portfolio must be > 0, got {current_portfolio}")
+    distance = abs(entry_price - stop_base)
+    if distance <= 0:
+        raise ValueError(f"distance entry_price-stop_base must be > 0, got entry={entry_price} stop={stop_base}")
+
+    lev = max(leverage, 1.0)
+    risk_amount = current_portfolio * max_loss_pct
+    target_qty = risk_amount / distance
+    target_notional = target_qty * entry_price
+    max_notional = current_portfolio * lev
+    notional = min(target_notional, max_notional)
+    quantity = notional / entry_price
+    sizing_clipped = target_notional > max_notional
+    # ``side`` is accepted for symmetry / future use (e.g. asymmetric risk
+    # rules); the math is side-symmetric because ``distance`` uses ``abs(...)``.
+    _ = side
+    return notional, quantity, sizing_clipped
+
+
 def should_skip_for_max_loss(
     entry_price: float,
     stop_base: float,

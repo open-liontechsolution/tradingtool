@@ -366,6 +366,7 @@ async def init_db() -> None:
                 maintenance_margin_pct  REAL    NOT NULL DEFAULT 0.005,
                 max_loss_per_trade_enabled INTEGER NOT NULL DEFAULT 0,
                 max_loss_per_trade_pct  REAL    NOT NULL DEFAULT 0.02,
+                position_sizing_mode    TEXT    NOT NULL DEFAULT 'full_equity',
                 status                  TEXT    NOT NULL DEFAULT 'active',
                 blown_at                TEXT,
                 polling_interval_s      INTEGER,
@@ -419,6 +420,7 @@ async def init_db() -> None:
                 invested_amount         REAL    NOT NULL,
                 leverage                REAL    NOT NULL,
                 quantity                REAL,
+                sizing_clipped          INTEGER NOT NULL DEFAULT 0,
                 pnl                     REAL,
                 pnl_pct                 REAL,
                 fees                    REAL,
@@ -576,6 +578,20 @@ async def init_db() -> None:
         st_cols = {row[1] for row in await cursor.fetchall()}
         if "liquidation_price" not in st_cols:
             await db.execute("ALTER TABLE sim_trades ADD COLUMN liquidation_price REAL")
+            await db.commit()
+
+        # --- risk-based position sizing (#144) ---
+        cursor = await db.execute("PRAGMA table_info(signal_configs)")
+        sc_cols = {row[1] for row in await cursor.fetchall()}
+        if "position_sizing_mode" not in sc_cols:
+            await db.execute(
+                "ALTER TABLE signal_configs ADD COLUMN position_sizing_mode TEXT NOT NULL DEFAULT 'full_equity'"
+            )
+            await db.commit()
+        cursor = await db.execute("PRAGMA table_info(sim_trades)")
+        st_cols = {row[1] for row in await cursor.fetchall()}
+        if "sizing_clipped" not in st_cols:
+            await db.execute("ALTER TABLE sim_trades ADD COLUMN sizing_clipped INTEGER NOT NULL DEFAULT 0")
             await db.commit()
 
         # --- rename portfolio → initial_portfolio + add current_portfolio (#48) ---
