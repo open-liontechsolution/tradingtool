@@ -120,6 +120,7 @@ async def _insert_config(
     maintenance_margin_pct: float = 0.005,
     max_loss_per_trade_enabled: bool = False,
     max_loss_per_trade_pct: float = 0.02,
+    position_sizing_mode: str = "full_equity",
 ) -> dict:
     now = _now_iso()
     async with get_db() as db:
@@ -129,9 +130,10 @@ async def _insert_config(
                  initial_portfolio, current_portfolio,
                  invested_amount, leverage, cost_bps, maintenance_margin_pct,
                  max_loss_per_trade_enabled, max_loss_per_trade_pct,
+                 position_sizing_mode,
                  polling_interval_s, active, last_processed_candle,
                  created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, NULL, 1, 0, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, NULL, 1, 0, ?, ?)""",
             (
                 symbol,
                 interval,
@@ -144,6 +146,7 @@ async def _insert_config(
                 maintenance_margin_pct,
                 1 if max_loss_per_trade_enabled else 0,
                 max_loss_per_trade_pct,
+                position_sizing_mode,
                 now,
                 now,
             ),
@@ -445,6 +448,7 @@ async def _run_parity_case(
     execution_mode: str = "close_current",
     max_loss_per_trade_enabled: bool = False,
     max_loss_per_trade_pct: float = 0.02,
+    position_sizing_mode: str = "full_equity",
 ) -> None:
     slot = _load_slot(slot_name)
     symbol = slot["symbol"]
@@ -467,6 +471,13 @@ async def _run_parity_case(
         # the signal_config columns. Mirror both for parity.
         strategy_params["max_loss_per_trade_enabled"] = True
         strategy_params["max_loss_per_trade_pct"] = max_loss_per_trade_pct
+    if position_sizing_mode != "full_equity":
+        # Same dual wiring (#144): live reads ``signal_configs.position_sizing_mode``,
+        # backtest reads ``params['position_sizing_mode']``. The risk % comes
+        # from ``max_loss_per_trade_pct`` on both paths — make sure backtest sees
+        # it via params even when the skip toggle is off.
+        strategy_params["position_sizing_mode"] = position_sizing_mode
+        strategy_params["max_loss_per_trade_pct"] = max_loss_per_trade_pct
     portfolio = 10_000.0
     cost_bps = 0.0
 
@@ -481,6 +492,7 @@ async def _run_parity_case(
         maintenance_margin_pct=maintenance_margin_pct,
         max_loss_per_trade_enabled=max_loss_per_trade_enabled,
         max_loss_per_trade_pct=max_loss_per_trade_pct,
+        position_sizing_mode=position_sizing_mode,
     )
 
     start_ms = int(candles[0]["open_time"])
@@ -573,6 +585,36 @@ async def test_parity_max_loss_filter_slot_d() -> None:
         expect_liquidation=True,
         max_loss_per_trade_enabled=True,
         max_loss_per_trade_pct=0.05,
+    )
+
+
+@pytest.mark.slow
+@pytest.mark.asyncio
+async def test_parity_risk_based_slot_a() -> None:
+    """Slot A × breakout × position_sizing_mode='risk_based' (#144).
+
+    Wires the new sizing mode through both engines (params dict for backtest,
+    signal_configs columns for live) and asserts trade-log parity. With
+    leverage=1 and a 1% target risk, most setups fall well below the leverage
+    cap so sizing is unclipped — pnl is bounded by the target risk %, very
+    different from the legacy ``full_equity`` mode where pnl scales with the
+    full distance to stop.
+
+    Single (slot, strategy) tuple is sufficient: the sizing math is plain
+    function-of-inputs sitting at the entry decision point of both engines,
+    sharing the same helper (``backend.risk.compute_risk_based_size``).
+    Divergence would surface immediately on the first trade.
+    """
+    if "slot_a" not in _ENABLED_SLOTS:
+        pytest.skip("slot_a disabled by PARITY_SLOTS env var")
+    fixture_path = FIXTURE_DIR / "slot_a.json.gz"
+    if not fixture_path.exists():
+        pytest.skip("slot_a.json.gz not present — run python -m tests.fixtures.parity._seed_slot_a")
+    await _run_parity_case(
+        "slot_a",
+        "breakout",
+        position_sizing_mode="risk_based",
+        max_loss_per_trade_pct=0.01,
     )
 
 

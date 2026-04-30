@@ -548,3 +548,140 @@ async def test_backtest_rejects_loosening_move_stop(monkeypatch):
     assert len(result.trade_log) == 1
     # Exit at the original stop (90), proving the loosening move was ignored.
     assert result.trade_log[0]["exit_price"] == pytest.approx(90.0, abs=0.5)
+
+
+# ---------------------------------------------------------------------------
+# Risk-based position sizing (#144)
+# ---------------------------------------------------------------------------
+
+
+def _scripted_long_then_stop(entry_close: float, stop_price: float, stop_idx: int = 4):
+    """Enter long at t=0 close, hold, then stop out at ``stop_idx``."""
+    from backend.strategies.base import Signal
+
+    def script(t, candle, state):
+        if t == 0 and state.side == "flat":
+            return [Signal(action="entry_long", price=entry_close, stop_price=stop_price)]
+        if t == stop_idx and state.side == "long" and float(candle["low"]) <= state.stop_price:
+            return [Signal(action="stop_long", price=state.stop_price)]
+        return []
+
+    return script
+
+
+@pytest.mark.asyncio
+async def test_risk_based_unclipped_caps_loss_at_target(monkeypatch):
+    """In risk_based mode, when leverage cap doesn't bind, realised loss-if-stopped
+    equals ``max_loss_per_trade_pct`` × equity (modulo cost_bps=0 fees)."""
+    step = INTERVAL_MS["1d"]
+    # entry close=100 (t=0), stop=95 (5% distance), price plunges at t=4.
+    candles = [
+        _make_row(step * 0, 100, 101, 99, 100),
+        _make_row(step * 1, 100, 101, 99, 100),
+        _make_row(step * 2, 100, 101, 99, 100),
+        _make_row(step * 3, 100, 101, 99, 100),
+        _make_row(step * 4, 100, 101, 90, 92),  # low 90 below stop 95 → stop fires
+        _make_row(step * 5, 92, 93, 91, 92),
+    ]
+    _patch_candles(monkeypatch, candles)
+    _patch_strategy(monkeypatch, _scripted_long_then_stop(entry_close=100.0, stop_price=95.0))
+
+    result = await run_backtest(
+        symbol="BTCUSDT",
+        interval="1d",
+        start_ms=0,
+        end_ms=step * 6,
+        strategy_name="scripted",
+        params={
+            "modo_ejecucion": "close_current",
+            "coste_total_bps": 0.0,
+            "leverage": 1.0,
+            "position_sizing_mode": "risk_based",
+            "max_loss_per_trade_pct": 0.02,  # target 2% of equity
+        },
+        initial_capital=10_000.0,
+    )
+    assert result.error is None
+    assert len(result.trade_log) == 1
+    trade = result.trade_log[0]
+    # Realised loss-if-stopped should equal -2% of starting equity (-200).
+    assert trade["pnl"] == pytest.approx(-200.0, abs=0.5)
+    assert trade["sizing_clipped"] is False
+
+
+@pytest.mark.asyncio
+async def test_risk_based_clipped_when_stop_tight(monkeypatch):
+    """When the target notional exceeds the leverage budget, the entry is clipped:
+    invested = equity × leverage, sizing_clipped=True, realised loss < target."""
+    step = INTERVAL_MS["1d"]
+    # entry=100 (t=0), stop=99.9 (0.1% distance) → target_notional = 200k @ lev=1
+    # gets clipped to 10k. Realised loss-if-stopped ≈ 10k × 0.001 = 10.
+    candles = [
+        _make_row(step * 0, 100, 100.5, 99.95, 100),
+        _make_row(step * 1, 100, 100.5, 99.95, 100),
+        _make_row(step * 2, 100, 100.5, 99.95, 100),
+        _make_row(step * 3, 100, 100.5, 99.95, 100),
+        _make_row(step * 4, 100, 100.5, 99.5, 99.8),  # low 99.5 < stop 99.9 → fires
+        _make_row(step * 5, 99.8, 99.9, 99.7, 99.8),
+    ]
+    _patch_candles(monkeypatch, candles)
+    _patch_strategy(monkeypatch, _scripted_long_then_stop(entry_close=100.0, stop_price=99.9))
+
+    result = await run_backtest(
+        symbol="BTCUSDT",
+        interval="1d",
+        start_ms=0,
+        end_ms=step * 6,
+        strategy_name="scripted",
+        params={
+            "modo_ejecucion": "close_current",
+            "coste_total_bps": 0.0,
+            "leverage": 1.0,
+            "position_sizing_mode": "risk_based",
+            "max_loss_per_trade_pct": 0.02,  # target 2% but unreachable at lev=1
+        },
+        initial_capital=10_000.0,
+    )
+    assert result.error is None
+    assert len(result.trade_log) == 1
+    trade = result.trade_log[0]
+    assert trade["sizing_clipped"] is True
+    # Realised loss is bounded by leverage cap (~ -10), well below target -200.
+    assert -15 < trade["pnl"] < -5
+
+
+@pytest.mark.asyncio
+async def test_full_equity_baseline_unchanged(monkeypatch):
+    """Sanity: ``full_equity`` mode (default) keeps pre-#144 behaviour. Same fixture
+    as the unclipped risk_based test but pnl is leverage × distance (5% of 10k = 500)."""
+    step = INTERVAL_MS["1d"]
+    candles = [
+        _make_row(step * 0, 100, 101, 99, 100),
+        _make_row(step * 1, 100, 101, 99, 100),
+        _make_row(step * 2, 100, 101, 99, 100),
+        _make_row(step * 3, 100, 101, 99, 100),
+        _make_row(step * 4, 100, 101, 90, 92),
+        _make_row(step * 5, 92, 93, 91, 92),
+    ]
+    _patch_candles(monkeypatch, candles)
+    _patch_strategy(monkeypatch, _scripted_long_then_stop(entry_close=100.0, stop_price=95.0))
+
+    result = await run_backtest(
+        symbol="BTCUSDT",
+        interval="1d",
+        start_ms=0,
+        end_ms=step * 6,
+        strategy_name="scripted",
+        params={
+            "modo_ejecucion": "close_current",
+            "coste_total_bps": 0.0,
+            "leverage": 1.0,
+            # mode omitted → full_equity default
+        },
+        initial_capital=10_000.0,
+    )
+    assert len(result.trade_log) == 1
+    trade = result.trade_log[0]
+    # invested = equity * lev = 10k, distance = 5% → loss = 500.
+    assert trade["pnl"] == pytest.approx(-500.0, abs=1.0)
+    assert trade["sizing_clipped"] is False

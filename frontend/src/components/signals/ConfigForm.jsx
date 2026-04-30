@@ -24,6 +24,7 @@ const FIELD_TIPS = {
   maintenanceMargin: 'Margen de mantenimiento usado para calcular el precio de liquidación. Binance baseline ≈ 0.005 (0.5%) para notional bajo.',
   maxLossEnabled: 'Si está activo, descarta entradas cuya pérdida estimada (entry → stop, considerando el apalancamiento) supere el % de equity configurado.',
   maxLossPct: 'Pérdida máxima permitida por trade como fracción del equity. E.g. 0.02 = "no abrir si la pérdida si salta el stop sería >2% del capital actual". Con leverage>1 escala automáticamente.',
+  positionSizingMode: 'full_equity (legacy): cada entrada despliega current_portfolio × leverage. risk_based: la entrada se dimensiona para que, si salta el stop, la pérdida realizada iguale Max loss % (capada por el límite de leverage). En risk_based el campo Invested amount (capital fijo) se ignora.',
 }
 
 const STEPS = [
@@ -58,6 +59,7 @@ export function ConfigForm({ strategies, onCreated }) {
   const [maintenanceMarginPct, setMaintenanceMarginPct] = useState(0.005)
   const [maxLossEnabled, setMaxLossEnabled] = useState(false)
   const [maxLossPct, setMaxLossPct] = useState(0.02)
+  const [positionSizingMode, setPositionSizingMode] = useState('full_equity')
   const [portfolio, setPortfolio] = useState(10000)
   const [leverage, setLeverage] = useState(1)
   const [investedAmount, setInvestedAmount] = useState(10000)
@@ -111,11 +113,14 @@ export function ConfigForm({ strategies, onCreated }) {
     'Cost (bps)': costBps,
     'Maint. margin %': maintenanceMarginPct,
     'Max loss/trade': maxLossEnabled ? `${(maxLossPct * 100).toFixed(2)}% del equity` : 'desactivado',
+    'Position sizing': positionSizingMode === 'risk_based'
+      ? `risk-based (target ${(maxLossPct * 100).toFixed(2)}% por trade)`
+      : 'full equity',
     Portfolio: fmtMoney(portfolio),
     ...(capitalMode === 'leverage'
       ? { Leverage: leverage > 1 ? `${leverage}× (liquidación calculada)` : `${leverage}× (sin apalancamiento)` }
       : { 'Invested amount': fmtMoney(investedAmount) }),
-  }), [symbol, interval, selectedStrat, paramValues, costBps, maintenanceMarginPct, maxLossEnabled, maxLossPct, portfolio, leverage, investedAmount, capitalMode])
+  }), [symbol, interval, selectedStrat, paramValues, costBps, maintenanceMarginPct, maxLossEnabled, maxLossPct, positionSizingMode, portfolio, leverage, investedAmount, capitalMode])
 
   const handleCreate = async () => {
     setLoading(true)
@@ -128,6 +133,7 @@ export function ConfigForm({ strategies, onCreated }) {
         maintenance_margin_pct: maintenanceMarginPct,
         max_loss_per_trade_enabled: maxLossEnabled,
         max_loss_per_trade_pct: maxLossPct,
+        position_sizing_mode: positionSizingMode,
         initial_portfolio: portfolio,
         ...(capitalMode === 'leverage'
           ? { leverage, invested_amount: null }
@@ -264,7 +270,22 @@ export function ConfigForm({ strategies, onCreated }) {
                 <FieldLabel tooltip={FIELD_TIPS.maxLossPct}>Max loss % (equity)</FieldLabel>
                 <input type="number" className="form-control" value={maxLossPct} min={0} step={0.001}
                   onChange={e => setMaxLossPct(parseFloat(e.target.value) || 0)}
-                  disabled={loading || !maxLossEnabled} />
+                  disabled={loading || (!maxLossEnabled && positionSizingMode !== 'risk_based')} />
+              </div>
+              <div className="form-group" style={{ gridColumn: '1 / span 2' }}>
+                <FieldLabel tooltip={FIELD_TIPS.positionSizingMode}>Position sizing</FieldLabel>
+                <select className="form-control" value={positionSizingMode}
+                  onChange={e => setPositionSizingMode(e.target.value)} disabled={loading}>
+                  <option value="full_equity">Full equity (legacy)</option>
+                  <option value="risk_based">Risk-based (target Max loss %)</option>
+                </select>
+                {positionSizingMode === 'risk_based' && (
+                  <div style={{ marginTop: '6px', fontSize: '0.78rem', color: 'var(--text-muted)', lineHeight: 1.4 }}>
+                    En modo <strong>risk-based</strong>, <em>Max loss %</em> es el <strong>target</strong> de
+                    pérdida-si-stop (no sólo umbral de skip). El campo <em>Invested amount</em> (capital fijo) se ignora.
+                    El toggle <em>Max loss/trade</em> se mantiene como red de seguridad si el cap de leverage corta el sizing.
+                  </div>
+                )}
               </div>
             </div>
           </div>

@@ -138,7 +138,20 @@ export function SimTradesList({ trades, onClose }) {
                     </td>
                     <td>{t.symbol}</td>
                     <td style={{ color: t.side === 'long' ? 'var(--color-success)' : 'var(--color-danger)', fontWeight: 600 }}>
-                      {t.side?.toUpperCase()}
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                        {t.side?.toUpperCase()}
+                        {t.sizing_clipped ? (
+                          <span
+                            title="Risk-based sizing fue capada por el límite de leverage. La pérdida-si-stop excede el target del config."
+                            style={{
+                              display: 'inline-block', padding: '1px 6px', borderRadius: 'var(--radius-sm)',
+                              background: 'rgba(245, 158, 11, 0.18)', color: 'var(--color-warning)',
+                              fontSize: '0.62rem', fontWeight: 700, letterSpacing: '0.04em',
+                              textTransform: 'uppercase',
+                            }}
+                          >clip</span>
+                        ) : null}
+                      </span>
                     </td>
                     {detailed && (
                       <td className="ta-right num-col" style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>{t.portfolio != null ? fmtMoney(t.portfolio) : '—'}</td>

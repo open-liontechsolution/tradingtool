@@ -70,6 +70,8 @@ async def _insert_config(
     leverage=1.0,
     cost_bps=10.0,
     active=1,
+    position_sizing_mode="full_equity",
+    max_loss_per_trade_pct=0.02,
 ) -> dict:
     if params is None:
         params = {"N_entrada": 5, "M_salida": 3, "stop_pct": 0.02}
@@ -81,9 +83,10 @@ async def _insert_config(
                 (symbol, interval, strategy, params,
                  initial_portfolio, current_portfolio,
                  invested_amount, leverage, cost_bps,
+                 max_loss_per_trade_pct, position_sizing_mode,
                  polling_interval_s, active, last_processed_candle,
                  created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)""",
             (
                 symbol,
                 interval,
@@ -94,6 +97,8 @@ async def _insert_config(
                 None,
                 leverage,
                 cost_bps,
+                max_loss_per_trade_pct,
+                position_sizing_mode,
                 None,
                 active,
                 now,
@@ -147,6 +152,7 @@ class TestStopBasePersisted:
             side="long",
             trigger_candle_time=1000000,
             stop_price=stop_price,
+            entry_price=100.0,
         )
         assert signal_id is not None
 
@@ -170,6 +176,7 @@ class TestStopBasePersisted:
             side="short",
             trigger_candle_time=2000000,
             stop_price=stop_price,
+            entry_price=100.0,
         )
         assert signal_id is not None
 
@@ -195,6 +202,7 @@ class TestSignalDedup:
             side="long",
             trigger_candle_time=5000000,
             stop_price=95.0,
+            entry_price=100.0,
         )
         assert sid1 is not None
 
@@ -204,6 +212,7 @@ class TestSignalDedup:
             side="long",
             trigger_candle_time=5000000,
             stop_price=95.0,
+            entry_price=100.0,
         )
         assert sid2 is None
 
@@ -220,6 +229,7 @@ class TestPortfolioModes:
             side="long",
             trigger_candle_time=8000000,
             stop_price=95.0,
+            entry_price=100.0,
         )
         async with get_db() as db:
             cursor = await db.execute(
@@ -265,6 +275,7 @@ class TestPortfolioModes:
             side="short",
             trigger_candle_time=9000000,
             stop_price=105.0,
+            entry_price=100.0,
         )
         async with get_db() as db:
             cursor = await db.execute(
@@ -289,6 +300,7 @@ class TestSimTradeStatus:
             side="long",
             trigger_candle_time=11000000,
             stop_price=95.0,
+            entry_price=100.0,
         )
         async with get_db() as db:
             cursor = await db.execute(
@@ -308,6 +320,7 @@ class TestSimTradeStatus:
             side="long",
             trigger_candle_time=12000000,
             stop_price=95.0,
+            entry_price=100.0,
         )
         async with get_db() as db:
             cursor = await db.execute(
@@ -316,3 +329,107 @@ class TestSimTradeStatus:
             )
             row = await cursor.fetchone()
         assert row[0] == "pending"
+
+
+class TestRiskBasedSizingMode:
+    """Per-config risk-based position sizing (#144).
+
+    In ``risk_based`` mode, ``invested_amount`` is derived from the stop
+    distance and the per-config risk %, not from leverage × portfolio.
+    """
+
+    @pytest.mark.asyncio
+    async def test_unclipped_long_invested_matches_formula(self):
+        await _setup_db()
+        # equity=10k, risk=2%, leverage=1, entry=100, stop=95 (5% distance).
+        # target_qty = 200/5 = 40. target_notional = 40*100 = 4000.
+        # max_notional = 10k → not clipped. invested = 4000.
+        config = await _insert_config(
+            portfolio=10_000.0, leverage=1.0, position_sizing_mode="risk_based", max_loss_per_trade_pct=0.02
+        )
+        signal_id = await _create_signal_and_sim_trade(
+            config=config,
+            side="long",
+            trigger_candle_time=20_000_000,
+            stop_price=95.0,
+            entry_price=100.0,
+        )
+        async with get_db() as db:
+            cursor = await db.execute(
+                "SELECT portfolio, invested_amount, leverage, sizing_clipped FROM sim_trades WHERE signal_id = ?",
+                (signal_id,),
+            )
+            row = await cursor.fetchone()
+        portfolio, invested, leverage, clipped = row
+        assert portfolio == pytest.approx(10_000.0)
+        assert invested == pytest.approx(4_000.0)
+        assert leverage == pytest.approx(1.0)
+        assert clipped == 0
+
+    @pytest.mark.asyncio
+    async def test_unclipped_short_symmetric(self):
+        await _setup_db()
+        # Short: stop above entry. Same formula via abs(distance).
+        config = await _insert_config(
+            portfolio=10_000.0, leverage=1.0, position_sizing_mode="risk_based", max_loss_per_trade_pct=0.02
+        )
+        signal_id = await _create_signal_and_sim_trade(
+            config=config,
+            side="short",
+            trigger_candle_time=21_000_000,
+            stop_price=105.0,
+            entry_price=100.0,
+        )
+        async with get_db() as db:
+            cursor = await db.execute(
+                "SELECT invested_amount, sizing_clipped FROM sim_trades WHERE signal_id = ?",
+                (signal_id,),
+            )
+            row = await cursor.fetchone()
+        assert row[0] == pytest.approx(4_000.0)
+        assert row[1] == 0
+
+    @pytest.mark.asyncio
+    async def test_clipped_when_target_exceeds_leverage_cap(self):
+        await _setup_db()
+        # entry=100, stop=99.9 (0.1% distance), risk=2%, leverage=1
+        # target_notional = 200k → clipped to max=10k. sizing_clipped=1.
+        config = await _insert_config(
+            portfolio=10_000.0, leverage=1.0, position_sizing_mode="risk_based", max_loss_per_trade_pct=0.02
+        )
+        signal_id = await _create_signal_and_sim_trade(
+            config=config,
+            side="long",
+            trigger_candle_time=22_000_000,
+            stop_price=99.9,
+            entry_price=100.0,
+        )
+        async with get_db() as db:
+            cursor = await db.execute(
+                "SELECT invested_amount, sizing_clipped FROM sim_trades WHERE signal_id = ?",
+                (signal_id,),
+            )
+            row = await cursor.fetchone()
+        assert row[0] == pytest.approx(10_000.0)
+        assert row[1] == 1
+
+    @pytest.mark.asyncio
+    async def test_full_equity_default_unchanged(self):
+        """Sanity: ``full_equity`` mode (default) keeps pre-#144 behaviour exactly."""
+        await _setup_db()
+        config = await _insert_config(portfolio=10_000.0, leverage=2.0)  # default mode
+        signal_id = await _create_signal_and_sim_trade(
+            config=config,
+            side="long",
+            trigger_candle_time=23_000_000,
+            stop_price=95.0,
+            entry_price=100.0,
+        )
+        async with get_db() as db:
+            cursor = await db.execute(
+                "SELECT invested_amount, sizing_clipped FROM sim_trades WHERE signal_id = ?",
+                (signal_id,),
+            )
+            row = await cursor.fetchone()
+        assert row[0] == pytest.approx(20_000.0)  # legacy: portfolio * leverage
+        assert row[1] == 0  # never set in full_equity

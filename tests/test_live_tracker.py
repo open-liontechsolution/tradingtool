@@ -734,6 +734,7 @@ class TestDynamicEquity:
             side="long",
             trigger_candle_time=2_000_000,
             stop_price=95.0,
+            entry_price=100.0,
         )
 
         async with get_db() as db:

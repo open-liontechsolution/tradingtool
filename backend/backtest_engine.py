@@ -12,7 +12,7 @@ from backend.backtest_metrics import compute_backtest_metrics
 from backend.download_engine import INTERVAL_MS
 from backend.live_tracker import compute_liquidation_price
 from backend.metrics_engine import load_candles_df
-from backend.risk import should_skip_for_max_loss
+from backend.risk import compute_risk_based_size, should_skip_for_max_loss
 from backend.strategies import get_strategy
 from backend.strategies.base import PositionState, Signal
 
@@ -92,19 +92,35 @@ def _run_backtest_compute(
     # an audit row — same convention as how blown=True drops entries.
     max_loss_enabled = bool(params.get("max_loss_per_trade_enabled", False))
     max_loss_pct = float(params.get("max_loss_per_trade_pct", 0.02))
+    # Position sizing mode (#144). ``full_equity`` keeps legacy behaviour
+    # (``invested = equity * leverage``); ``risk_based`` derives invested from
+    # the stop distance so the loss-if-stopped equals
+    # ``equity * max_loss_per_trade_pct``, capped by the leverage budget. Live
+    # reads the mode from ``signal_configs.position_sizing_mode``; backtest
+    # reads it from ``params`` — both must be set in lockstep for a parity case.
+    position_sizing_mode = str(params.get("position_sizing_mode", "full_equity"))
 
     equity = initial_capital
     equity_curve: list[float] = []
     timestamps: list[int] = []
     trade_log: list[dict] = []
     state = PositionState()
-    pending_entry: Signal | None = None  # deferred to next open
+    # Pending entry deferred to next candle's open (open_next semantic).
+    # The tuple carries the trigger candle's close alongside the Signal so
+    # risk-based sizing (#144) can use the trigger close — not the next
+    # candle's open — as the deterministic ``entry_price``, matching live's
+    # signal_engine and keeping the parity invariant from #142.
+    pending_entry: tuple[Signal, float] | None = None
     # Pending exit / stop signal (open_next semantic, #58 Gap 2). Holds the
     # exit/stop signal raised by strategy.on_candle while still in the closing
     # candle; fills at the NEXT candle's open. Liquidations don't queue here
     # — they're intrabar events that fire immediately at liquidation_price.
     pending_exit: Signal | None = None
     entry_equity: float = 0.0  # equity at moment of entry (before entry fee)
+    # Sizing clip flag carried over from entry to exit so the trade_log row
+    # can record it. Reset to False between trades. Mirrors
+    # ``sim_trades.sizing_clipped`` in live.
+    entry_sizing_clipped: bool = False
     # ``blown`` mirrors live's ``signal_configs.status='blown'``: once a trade
     # closes via liquidation, the account is gone and no new entries fire for
     # the remainder of the run. Without this flag backtest would keep sizing
@@ -114,9 +130,37 @@ def _run_backtest_compute(
     # curve flatlines at the post-liquidation level.
     blown = False
 
-    def _enter(side: str, exec_price: float, sig: Signal, candle: pd.Series) -> tuple[PositionState, float, float]:
-        """Build a PositionState for a fresh entry. Returns (state, fee, entry_equity_snapshot)."""
-        invested = equity * leverage
+    def _enter(
+        side: str,
+        exec_price: float,
+        sig: Signal,
+        candle: pd.Series,
+        sizing_close: float,
+    ) -> tuple[PositionState, float, float, bool]:
+        """Build a PositionState for a fresh entry.
+
+        ``sizing_close`` is the trigger candle's close — used to anchor sizing
+        decisions (#142 / #144) deterministically at signal-emission time,
+        independent of the actual fill price (`exec_price`). For
+        ``close_current`` mode they coincide; for ``open_next`` they differ.
+
+        Returns ``(state, entry_fee, equity_snapshot, sizing_clipped)``.
+        ``sizing_clipped`` is always False under ``full_equity`` mode; under
+        ``risk_based`` it indicates the leverage cap clipped the target
+        notional (the realised loss-if-stopped will exceed the target).
+        """
+        sizing_clipped = False
+        if position_sizing_mode == "risk_based":
+            invested, _qty_at_trigger, sizing_clipped = compute_risk_based_size(
+                side=side,  # type: ignore[arg-type]
+                entry_price=sizing_close,
+                stop_base=sig.stop_price,
+                current_portfolio=equity,
+                max_loss_pct=max_loss_pct,
+                leverage=leverage,
+            )
+        else:
+            invested = equity * leverage
         qty = invested / exec_price
         # Entry fee is on full notional (matches live: invested * cost_factor).
         entry_fee = invested * cost_factor
@@ -134,7 +178,7 @@ def _run_backtest_compute(
             quantity=qty,
             liquidation_price=liq,
         )
-        return new_state, entry_fee, equity
+        return new_state, entry_fee, equity, sizing_clipped
 
     def _close_trade(exec_price: float, exit_reason: str, exit_candle_idx: int, exit_candle: pd.Series) -> float:
         """Close the open trade at ``exec_price``, append to trade_log, return new equity.
@@ -164,6 +208,7 @@ def _run_backtest_compute(
                 "equity_before": round(entry_equity, 4),
                 "equity_after": round(equity_after, 4),
                 "position_size": round(entry_equity, 4),
+                "sizing_clipped": entry_sizing_clipped,
             }
         )
         state = PositionState()
@@ -194,11 +239,13 @@ def _run_backtest_compute(
 
         # Execute deferred entry from previous candle at current open
         if pending_entry is not None and execution_mode == "open_next":
-            sig = pending_entry
+            sig, trigger_close = pending_entry
             pending_entry = None
             if sig.action in ("entry_long", "entry_short"):
                 side = "long" if sig.action == "entry_long" else "short"
-                state, fee, entry_equity = _enter(side, open_price, sig, candle)
+                state, fee, entry_equity, entry_sizing_clipped = _enter(
+                    side, open_price, sig, candle, sizing_close=trigger_close
+                )
                 equity -= fee
 
         # Get signals from strategy
@@ -297,12 +344,17 @@ def _run_backtest_compute(
                         if skip:
                             break
                     if execution_mode == "open_next":
-                        pending_entry = sig
+                        # Stash trigger close alongside the signal so #144
+                        # sizing uses it at fill time (the next candle's open).
+                        pending_entry = (sig, close_price)
                     else:
                         # close_current: execute at close — same sizing helper
                         # as open_next so leverage + liquidation_price land
-                        # consistently on both fill paths.
-                        state, fee, entry_equity = _enter(side, close_price, sig, candle)
+                        # consistently on both fill paths. trigger close ==
+                        # exec price here, so sizing_close = close_price.
+                        state, fee, entry_equity, entry_sizing_clipped = _enter(
+                            side, close_price, sig, candle, sizing_close=close_price
+                        )
                         equity -= fee
                     break
 
