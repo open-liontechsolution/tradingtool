@@ -22,6 +22,8 @@ const FIELD_TIPS = {
   strategy: 'Estrategia a ejecutar. Cada una expone sus propios parámetros más abajo.',
   costBps: 'Coste de transacción aplicado a cada lado del trade en basis points (1 bps = 0.01%). Binance ≈ 10 bps/lado.',
   maintenanceMargin: 'Margen de mantenimiento usado para calcular el precio de liquidación. Binance baseline ≈ 0.005 (0.5%) para notional bajo.',
+  maxLossEnabled: 'Si está activo, descarta entradas cuya pérdida estimada (entry → stop, considerando el apalancamiento) supere el % de equity configurado.',
+  maxLossPct: 'Pérdida máxima permitida por trade como fracción del equity. E.g. 0.02 = "no abrir si la pérdida si salta el stop sería >2% del capital actual". Con leverage>1 escala automáticamente.',
 }
 
 const STEPS = [
@@ -54,6 +56,8 @@ export function ConfigForm({ strategies, onCreated }) {
   const [paramValues, setParamValues] = useState({})
   const [costBps, setCostBps] = useState(10)
   const [maintenanceMarginPct, setMaintenanceMarginPct] = useState(0.005)
+  const [maxLossEnabled, setMaxLossEnabled] = useState(false)
+  const [maxLossPct, setMaxLossPct] = useState(0.02)
   const [portfolio, setPortfolio] = useState(10000)
   const [leverage, setLeverage] = useState(1)
   const [investedAmount, setInvestedAmount] = useState(10000)
@@ -94,6 +98,7 @@ export function ConfigForm({ strategies, onCreated }) {
     portfolio > 0 &&
     maintenanceMarginPct >= 0 &&
     costBps >= 0 &&
+    (!maxLossEnabled || maxLossPct > 0) &&
     (capitalMode === 'leverage' ? leverage > 0 : investedAmount > 0)
 
   const summary = useMemo(() => ({
@@ -105,11 +110,12 @@ export function ConfigForm({ strategies, onCreated }) {
       .map(([k, v]) => `${k}=${v}`).join(', ') || '—',
     'Cost (bps)': costBps,
     'Maint. margin %': maintenanceMarginPct,
+    'Max loss/trade': maxLossEnabled ? `${(maxLossPct * 100).toFixed(2)}% del equity` : 'desactivado',
     Portfolio: fmtMoney(portfolio),
     ...(capitalMode === 'leverage'
       ? { Leverage: leverage > 1 ? `${leverage}× (liquidación calculada)` : `${leverage}× (sin apalancamiento)` }
       : { 'Invested amount': fmtMoney(investedAmount) }),
-  }), [symbol, interval, selectedStrat, paramValues, costBps, maintenanceMarginPct, portfolio, leverage, investedAmount, capitalMode])
+  }), [symbol, interval, selectedStrat, paramValues, costBps, maintenanceMarginPct, maxLossEnabled, maxLossPct, portfolio, leverage, investedAmount, capitalMode])
 
   const handleCreate = async () => {
     setLoading(true)
@@ -120,6 +126,8 @@ export function ConfigForm({ strategies, onCreated }) {
         params: { ...paramValues, coste_total_bps: costBps },
         cost_bps: costBps,
         maintenance_margin_pct: maintenanceMarginPct,
+        max_loss_per_trade_enabled: maxLossEnabled,
+        max_loss_per_trade_pct: maxLossPct,
         initial_portfolio: portfolio,
         ...(capitalMode === 'leverage'
           ? { leverage, invested_amount: null }
@@ -242,6 +250,21 @@ export function ConfigForm({ strategies, onCreated }) {
                 <FieldLabel tooltip={FIELD_TIPS.maintenanceMargin}>Maint. margin %</FieldLabel>
                 <input type="number" className="form-control" value={maintenanceMarginPct} min={0} step={0.001}
                   onChange={e => setMaintenanceMarginPct(parseFloat(e.target.value) || 0)} disabled={loading} />
+              </div>
+              <div className="form-group">
+                <FieldLabel tooltip={FIELD_TIPS.maxLossEnabled}>Max loss/trade</FieldLabel>
+                <div className="toggle-group">
+                  <button type="button" className={`toggle-option${maxLossEnabled ? ' active' : ''}`}
+                    onClick={() => !loading && setMaxLossEnabled(true)}>On</button>
+                  <button type="button" className={`toggle-option${!maxLossEnabled ? ' active' : ''}`}
+                    onClick={() => !loading && setMaxLossEnabled(false)}>Off</button>
+                </div>
+              </div>
+              <div className="form-group">
+                <FieldLabel tooltip={FIELD_TIPS.maxLossPct}>Max loss % (equity)</FieldLabel>
+                <input type="number" className="form-control" value={maxLossPct} min={0} step={0.001}
+                  onChange={e => setMaxLossPct(parseFloat(e.target.value) || 0)}
+                  disabled={loading || !maxLossEnabled} />
               </div>
             </div>
           </div>

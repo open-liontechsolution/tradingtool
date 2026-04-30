@@ -118,6 +118,8 @@ async def _insert_config(
     cost_bps: float,
     leverage: float = 1.0,
     maintenance_margin_pct: float = 0.005,
+    max_loss_per_trade_enabled: bool = False,
+    max_loss_per_trade_pct: float = 0.02,
 ) -> dict:
     now = _now_iso()
     async with get_db() as db:
@@ -126,9 +128,10 @@ async def _insert_config(
                 (symbol, interval, strategy, params,
                  initial_portfolio, current_portfolio,
                  invested_amount, leverage, cost_bps, maintenance_margin_pct,
+                 max_loss_per_trade_enabled, max_loss_per_trade_pct,
                  polling_interval_s, active, last_processed_candle,
                  created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL, 1, 0, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, NULL, 1, 0, ?, ?)""",
             (
                 symbol,
                 interval,
@@ -139,6 +142,8 @@ async def _insert_config(
                 leverage,
                 cost_bps,
                 maintenance_margin_pct,
+                1 if max_loss_per_trade_enabled else 0,
+                max_loss_per_trade_pct,
                 now,
                 now,
             ),
@@ -438,6 +443,8 @@ async def _run_parity_case(
     maintenance_margin_pct: float = 0.005,
     expect_liquidation: bool = False,
     execution_mode: str = "close_current",
+    max_loss_per_trade_enabled: bool = False,
+    max_loss_per_trade_pct: float = 0.02,
 ) -> None:
     slot = _load_slot(slot_name)
     symbol = slot["symbol"]
@@ -455,6 +462,11 @@ async def _run_parity_case(
         # engines share the same config.
         strategy_params["leverage"] = leverage
         strategy_params["maintenance_margin_pct"] = maintenance_margin_pct
+    if max_loss_per_trade_enabled:
+        # Same dual wiring as leverage/mm: backtest reads from params, live from
+        # the signal_config columns. Mirror both for parity.
+        strategy_params["max_loss_per_trade_enabled"] = True
+        strategy_params["max_loss_per_trade_pct"] = max_loss_per_trade_pct
     portfolio = 10_000.0
     cost_bps = 0.0
 
@@ -467,6 +479,8 @@ async def _run_parity_case(
         cost_bps=cost_bps,
         leverage=leverage,
         maintenance_margin_pct=maintenance_margin_pct,
+        max_loss_per_trade_enabled=max_loss_per_trade_enabled,
+        max_loss_per_trade_pct=max_loss_per_trade_pct,
     )
 
     start_ms = int(candles[0]["open_time"])
@@ -526,6 +540,40 @@ async def test_parity_open_next_slot_strategy(slot_name: str, strategy_name: str
     if not fixture_path.exists():
         pytest.skip(f"fixture {fixture_path.name} not present — regenerate with the matching seeder script")
     await _run_parity_case(slot_name, strategy_name, execution_mode="open_next")
+
+
+@pytest.mark.slow
+@pytest.mark.asyncio
+async def test_parity_max_loss_filter_slot_d() -> None:
+    """Slot D × breakout × leverage=10 × max-loss filter ON (#142).
+
+    Wires the max-loss-per-trade filter through both engines (params dict for
+    backtest, signal_configs columns for live) and asserts trade-log parity.
+    With leverage=10 and a 5% equity threshold, the filter drops entries
+    whose stop is more than ~0.5% from the entry — slot D is dense and
+    volatile enough to exercise both the take-the-trade and skip-the-trade
+    branches of the filter on the same dataset.
+
+    Single (slot, strategy) tuple is sufficient: the filter is plain math
+    sitting at the entry decision point of both engines, sharing the same
+    helper (``backend.risk.should_skip_for_max_loss``). If the filter
+    diverges between engines, the trade lists fall out of step almost
+    immediately on this slot.
+    """
+    if "slot_d" not in _ENABLED_SLOTS:
+        pytest.skip("slot_d disabled by PARITY_SLOTS env var")
+    fixture_path = FIXTURE_DIR / "slot_d.json.gz"
+    if not fixture_path.exists():
+        pytest.skip("slot_d.json.gz not present — run python -m tests.fixtures.parity._seed_slot_d")
+    await _run_parity_case(
+        "slot_d",
+        "breakout",
+        leverage=10.0,
+        maintenance_margin_pct=0.005,
+        expect_liquidation=True,
+        max_loss_per_trade_enabled=True,
+        max_loss_per_trade_pct=0.05,
+    )
 
 
 @pytest.mark.slow

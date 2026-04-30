@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from backend.database import get_db
 from backend.download_engine import INTERVAL_MS, ensure_candles
 from backend.metrics_engine import load_candles_df
+from backend.risk import should_skip_for_max_loss
 from backend.strategies import get_strategy
 from backend.strategies.base import PositionState
 
@@ -97,6 +98,48 @@ async def _update_last_processed(config_id: int, candle_time: int) -> None:
             (candle_time, _now_iso(), config_id),
         )
         await db.commit()
+
+
+async def _persist_skipped_signal(
+    config: dict,
+    side: str,
+    trigger_candle_time: int,
+    stop_price: float,
+) -> None:
+    """Record a signal that was suppressed by the max-loss-per-trade filter (#142).
+
+    Inserts a ``signals`` row with ``status='skipped_risk'`` so the user can
+    audit how many setups got dropped per config. Does NOT create a sim_trade.
+    The existing ``idx_signals_dedup (config_id, trigger_candle_time)`` unique
+    index protects against double-insert if scan_config retries this candle.
+    """
+    now = _now_iso()
+    async with get_db() as db:
+        try:
+            await db.execute(
+                """INSERT INTO signals
+                    (config_id, symbol, interval, strategy, side,
+                     trigger_candle_time, stop_price,
+                     status, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, 'skipped_risk', ?)""",
+                (
+                    config["id"],
+                    config["symbol"],
+                    config["interval"],
+                    config["strategy"],
+                    side,
+                    trigger_candle_time,
+                    stop_price,
+                    now,
+                ),
+            )
+            await db.commit()
+        except Exception:
+            logger.debug(
+                "Duplicate skipped-risk signal for config %d candle %d",
+                config["id"],
+                trigger_candle_time,
+            )
 
 
 async def _create_signal_and_sim_trade(
@@ -279,6 +322,41 @@ async def scan_config(config: dict) -> None:
     for sig in signals:
         if sig.action in ("entry_long", "entry_short"):
             side = "long" if sig.action == "entry_long" else "short"
+
+            # Max-loss-per-trade risk filter (#142). Drop entries whose
+            # estimated loss-if-stopped (under the configured leverage)
+            # would exceed the per-config equity-loss threshold. Reference
+            # entry price = trigger candle's close (deterministic at signal
+            # time, identical in backtest → keeps parity).
+            if config.get("max_loss_per_trade_enabled"):
+                lev = config.get("leverage")
+                lev = float(lev) if lev is not None else 1.0
+                skip, est_loss = should_skip_for_max_loss(
+                    entry_price=float(candle["close"]),
+                    stop_base=sig.stop_price,
+                    side=side,
+                    leverage=lev,
+                    invested_amount=config.get("invested_amount"),
+                    current_portfolio=float(config["current_portfolio"]),
+                    max_loss_pct=float(config["max_loss_per_trade_pct"]),
+                )
+                if skip:
+                    logger.info(
+                        "Risk filter: skipping config=%d side=%s candle=%d est_loss=%.4f threshold=%.4f",
+                        config["id"],
+                        side,
+                        last_closed,
+                        est_loss,
+                        float(config["max_loss_per_trade_pct"]),
+                    )
+                    await _persist_skipped_signal(
+                        config=config,
+                        side=side,
+                        trigger_candle_time=last_closed,
+                        stop_price=sig.stop_price,
+                    )
+                    break
+
             await _create_signal_and_sim_trade(
                 config=config,
                 side=side,

@@ -37,6 +37,8 @@ class SignalConfigCreate(BaseModel):
     maintenance_margin_pct: float = 0.005
     polling_interval_s: int | None = None
     telegram_enabled: bool = False
+    max_loss_per_trade_enabled: bool = False
+    max_loss_per_trade_pct: float = 0.02
 
 
 class SignalConfigPatch(BaseModel):
@@ -48,6 +50,8 @@ class SignalConfigPatch(BaseModel):
     maintenance_margin_pct: float | None = None
     polling_interval_s: int | None = None
     telegram_enabled: bool | None = None
+    max_loss_per_trade_enabled: bool | None = None
+    max_loss_per_trade_pct: float | None = None
 
 
 class RealTradeCreate(BaseModel):
@@ -106,9 +110,10 @@ async def create_signal_config(
                      initial_portfolio, current_portfolio,
                      invested_amount, leverage, cost_bps,
                      maintenance_margin_pct,
+                     max_loss_per_trade_enabled, max_loss_per_trade_pct,
                      polling_interval_s, active, telegram_enabled, last_processed_candle,
                      created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0, ?, ?)""",
                 (
                     user.id,
                     req.symbol.upper(),
@@ -121,6 +126,8 @@ async def create_signal_config(
                     req.leverage,
                     req.cost_bps,
                     req.maintenance_margin_pct,
+                    1 if req.max_loss_per_trade_enabled else 0,
+                    req.max_loss_per_trade_pct,
                     req.polling_interval_s,
                     1 if req.telegram_enabled else 0,
                     now,
@@ -166,6 +173,7 @@ async def list_signal_configs(
         c["params"] = json.loads(c["params"]) if isinstance(c["params"], str) else c["params"]
         c["active"] = bool(c["active"])
         c["telegram_enabled"] = bool(c.get("telegram_enabled"))
+        c["max_loss_per_trade_enabled"] = bool(c.get("max_loss_per_trade_enabled"))
         configs.append(c)
     return {"configs": configs}
 
@@ -206,6 +214,12 @@ async def patch_signal_config(
     if req.telegram_enabled is not None:
         fields.append("telegram_enabled = ?")
         values.append(1 if req.telegram_enabled else 0)
+    if req.max_loss_per_trade_enabled is not None:
+        fields.append("max_loss_per_trade_enabled = ?")
+        values.append(1 if req.max_loss_per_trade_enabled else 0)
+    if req.max_loss_per_trade_pct is not None:
+        fields.append("max_loss_per_trade_pct = ?")
+        values.append(req.max_loss_per_trade_pct)
 
     if not fields:
         raise HTTPException(400, "No fields to update")

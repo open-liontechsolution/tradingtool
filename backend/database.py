@@ -364,6 +364,8 @@ async def init_db() -> None:
                 leverage                REAL,
                 cost_bps                REAL    NOT NULL DEFAULT 10.0,
                 maintenance_margin_pct  REAL    NOT NULL DEFAULT 0.005,
+                max_loss_per_trade_enabled INTEGER NOT NULL DEFAULT 0,
+                max_loss_per_trade_pct  REAL    NOT NULL DEFAULT 0.02,
                 status                  TEXT    NOT NULL DEFAULT 'active',
                 blown_at                TEXT,
                 polling_interval_s      INTEGER,
@@ -557,6 +559,18 @@ async def init_db() -> None:
             await db.commit()
         if "blown_at" not in sc_cols:
             await db.execute("ALTER TABLE signal_configs ADD COLUMN blown_at TEXT")
+            await db.commit()
+
+        # --- max-loss-per-trade risk filter (#142) ---
+        cursor = await db.execute("PRAGMA table_info(signal_configs)")
+        sc_cols = {row[1] for row in await cursor.fetchall()}
+        if "max_loss_per_trade_enabled" not in sc_cols:
+            await db.execute(
+                "ALTER TABLE signal_configs ADD COLUMN max_loss_per_trade_enabled INTEGER NOT NULL DEFAULT 0"
+            )
+            await db.commit()
+        if "max_loss_per_trade_pct" not in sc_cols:
+            await db.execute("ALTER TABLE signal_configs ADD COLUMN max_loss_per_trade_pct REAL NOT NULL DEFAULT 0.02")
             await db.commit()
         cursor = await db.execute("PRAGMA table_info(sim_trades)")
         st_cols = {row[1] for row in await cursor.fetchall()}
