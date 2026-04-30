@@ -12,6 +12,7 @@ from backend.backtest_metrics import compute_backtest_metrics
 from backend.download_engine import INTERVAL_MS
 from backend.live_tracker import compute_liquidation_price
 from backend.metrics_engine import load_candles_df
+from backend.risk import should_skip_for_max_loss
 from backend.strategies import get_strategy
 from backend.strategies.base import PositionState, Signal
 
@@ -84,6 +85,13 @@ def _run_backtest_compute(
     # at liquidation_price with exit_reason='liquidated'.
     leverage = float(params.get("leverage", 1.0))
     maintenance_margin_pct = float(params.get("maintenance_margin_pct", 0.005))
+    # Max-loss-per-trade risk filter (#142). Mirrors signal_configs columns:
+    # when enabled, entry signals whose estimated loss-if-stopped would exceed
+    # max_loss_per_trade_pct of equity (under the configured leverage) are
+    # silently dropped, matching live's behaviour. Backtest doesn't persist
+    # an audit row — same convention as how blown=True drops entries.
+    max_loss_enabled = bool(params.get("max_loss_per_trade_enabled", False))
+    max_loss_pct = float(params.get("max_loss_per_trade_pct", 0.02))
 
     equity = initial_capital
     equity_curve: list[float] = []
@@ -270,13 +278,30 @@ def _run_backtest_compute(
         if not exit_executed and state.side == "flat" and not blown:
             for sig in signals:
                 if sig.action in ("entry_long", "entry_short"):
+                    side = "long" if sig.action == "entry_long" else "short"
+                    # Max-loss-per-trade risk filter (#142). Reference entry
+                    # price = trigger candle's close, identical to live's
+                    # signal_engine — keeps parity. Computed against the
+                    # current ``equity`` snapshot (mirrors live's
+                    # current_portfolio).
+                    if max_loss_enabled:
+                        skip, _ = should_skip_for_max_loss(
+                            entry_price=close_price,
+                            stop_base=sig.stop_price,
+                            side=side,
+                            leverage=leverage,
+                            invested_amount=None,
+                            current_portfolio=equity,
+                            max_loss_pct=max_loss_pct,
+                        )
+                        if skip:
+                            break
                     if execution_mode == "open_next":
                         pending_entry = sig
                     else:
                         # close_current: execute at close — same sizing helper
                         # as open_next so leverage + liquidation_price land
                         # consistently on both fill paths.
-                        side = "long" if sig.action == "entry_long" else "short"
                         state, fee, entry_equity = _enter(side, close_price, sig, candle)
                         equity -= fee
                     break

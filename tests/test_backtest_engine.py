@@ -218,6 +218,91 @@ async def test_trending_market_produces_trades(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_max_loss_filter_off_baseline(monkeypatch):
+    """Baseline: with the toggle off, the strategy on a trending market opens trades."""
+    _patch_candles(monkeypatch, _build_trending_up_candles(n=100))
+    step = INTERVAL_MS["1d"]
+    result = await run_backtest(
+        symbol="BTCUSDT",
+        interval="1d",
+        start_ms=0,
+        end_ms=step * 100,
+        strategy_name="breakout",
+        params={
+            "N_entrada": 20,
+            "M_salida": 10,
+            "stop_pct": 0.05,
+            "habilitar_long": True,
+            "habilitar_short": False,
+            # filter explicitly off
+            "max_loss_per_trade_enabled": False,
+            "max_loss_per_trade_pct": 0.001,
+        },
+        initial_capital=10_000.0,
+    )
+    assert result.error is None
+    assert len(result.trade_log) >= 1
+
+
+@pytest.mark.asyncio
+async def test_max_loss_filter_on_with_tight_threshold_drops_all_entries(monkeypatch):
+    """Same trending market, same strategy, but filter on with a threshold below the
+    breakout's stop distance — every entry should be dropped, trade_log empty."""
+    _patch_candles(monkeypatch, _build_trending_up_candles(n=100))
+    step = INTERVAL_MS["1d"]
+    result = await run_backtest(
+        symbol="BTCUSDT",
+        interval="1d",
+        start_ms=0,
+        end_ms=step * 100,
+        strategy_name="breakout",
+        params={
+            "N_entrada": 20,
+            "M_salida": 10,
+            "stop_pct": 0.05,
+            "habilitar_long": True,
+            "habilitar_short": False,
+            "max_loss_per_trade_enabled": True,
+            # 0.1% threshold is well below any realistic breakout stop distance
+            # (≥1% in this fixture). Filter must drop every entry.
+            "max_loss_per_trade_pct": 0.001,
+        },
+        initial_capital=10_000.0,
+    )
+    assert result.error is None
+    assert result.trade_log == []
+    # Equity curve still produced (mark-to-market each candle), no compounding.
+    assert len(result.equity_curve) == 100
+    assert result.equity_curve[-1] == pytest.approx(10_000.0, abs=1e-6)
+
+
+@pytest.mark.asyncio
+async def test_max_loss_filter_on_with_wide_threshold_takes_trades(monkeypatch):
+    """Filter on but threshold wide enough that the breakout passes — trades happen."""
+    _patch_candles(monkeypatch, _build_trending_up_candles(n=100))
+    step = INTERVAL_MS["1d"]
+    result = await run_backtest(
+        symbol="BTCUSDT",
+        interval="1d",
+        start_ms=0,
+        end_ms=step * 100,
+        strategy_name="breakout",
+        params={
+            "N_entrada": 20,
+            "M_salida": 10,
+            "stop_pct": 0.05,
+            "habilitar_long": True,
+            "habilitar_short": False,
+            "max_loss_per_trade_enabled": True,
+            "max_loss_per_trade_pct": 0.50,  # 50% — won't filter realistic breakouts
+        },
+        initial_capital=10_000.0,
+    )
+    assert result.error is None
+    assert len(result.trade_log) >= 1
+
+
+@pytest.mark.asyncio
 async def test_equity_curve_length_matches_candles(monkeypatch):
     _patch_candles(monkeypatch, _build_flat_candles(n=50))
 

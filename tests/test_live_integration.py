@@ -81,6 +81,8 @@ async def _insert_config(**overrides) -> dict:
         "polling_interval_s": None,
         "active": 1,
         "last_processed_candle": 0,
+        "max_loss_per_trade_enabled": 0,
+        "max_loss_per_trade_pct": 0.02,
     }
     defaults.update(overrides)
     # Tolerate legacy callers that still pass stop_cross_pct=... or portfolio=...
@@ -96,9 +98,10 @@ async def _insert_config(**overrides) -> dict:
                 (symbol, interval, strategy, params,
                  initial_portfolio, current_portfolio,
                  invested_amount, leverage, cost_bps,
+                 max_loss_per_trade_enabled, max_loss_per_trade_pct,
                  polling_interval_s, active, last_processed_candle,
                  created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 defaults["symbol"],
                 defaults["interval"],
@@ -109,6 +112,8 @@ async def _insert_config(**overrides) -> dict:
                 defaults["invested_amount"],
                 defaults["leverage"],
                 defaults["cost_bps"],
+                defaults["max_loss_per_trade_enabled"],
+                defaults["max_loss_per_trade_pct"],
                 defaults["polling_interval_s"],
                 defaults["active"],
                 defaults["last_processed_candle"],
@@ -386,6 +391,140 @@ class TestSignalDetection:
         signals = await _get_signals()
         assert len(signals) == 1
         assert signals[0]["status"] == "active"  # unchanged
+
+
+# ---------------------------------------------------------------------------
+# Tests: max-loss-per-trade risk filter (#142)
+# ---------------------------------------------------------------------------
+
+
+class TestMaxLossRiskFilter:
+    @pytest.mark.asyncio
+    async def test_filter_off_takes_trade(self):
+        """Regression: with the toggle off, the breakout signal goes through normally."""
+        await _setup_db()
+        config = await _insert_config(
+            max_loss_per_trade_enabled=0,
+            max_loss_per_trade_pct=0.01,  # would trigger if enabled
+        )
+        df, breakout_time, stop_base = _make_breakout_df()
+        fake_now = breakout_time + STEP_MS + 1
+
+        with (
+            patch("backend.signal_engine._now_ms", return_value=fake_now),
+            patch("backend.signal_engine.ensure_candles", new=AsyncMock(return_value=True)),
+            patch("backend.signal_engine.load_candles_df", new=AsyncMock(return_value=df)),
+        ):
+            await scan_config(config)
+
+        signals = await _get_signals()
+        trades = await _get_sim_trades()
+        assert len(signals) == 1
+        assert signals[0]["status"] == "pending"
+        assert len(trades) == 1
+        assert trades[0]["status"] == "pending_entry"
+
+    @pytest.mark.asyncio
+    async def test_filter_on_skips_wide_stop(self):
+        """When the loss-if-stopped exceeds the threshold, no sim_trade is created
+        and a 'skipped_risk' row is recorded in `signals` for audit."""
+        await _setup_db()
+        # Breakout candle: close=125, stop_base ≈ 96.04 → distance ≈ 23.17% of equity
+        # at leverage=1. Threshold 10% → must skip.
+        config = await _insert_config(
+            max_loss_per_trade_enabled=1,
+            max_loss_per_trade_pct=0.10,
+        )
+        df, breakout_time, _ = _make_breakout_df()
+        fake_now = breakout_time + STEP_MS + 1
+
+        with (
+            patch("backend.signal_engine._now_ms", return_value=fake_now),
+            patch("backend.signal_engine.ensure_candles", new=AsyncMock(return_value=True)),
+            patch("backend.signal_engine.load_candles_df", new=AsyncMock(return_value=df)),
+        ):
+            await scan_config(config)
+
+        trades = await _get_sim_trades()
+        assert len(trades) == 0  # filter dropped the entry
+
+        skipped = await _get_signals(status="skipped_risk")
+        assert len(skipped) == 1
+        assert skipped[0]["side"] == "long"
+        assert skipped[0]["trigger_candle_time"] == breakout_time
+
+    @pytest.mark.asyncio
+    async def test_filter_on_high_threshold_takes_trade(self):
+        """If the threshold is wide enough that the estimated loss fits, the entry
+        flows normally — proves the filter doesn't reject every entry blindly."""
+        await _setup_db()
+        # Same breakout (~23% loss), threshold 30% → does NOT skip.
+        config = await _insert_config(
+            max_loss_per_trade_enabled=1,
+            max_loss_per_trade_pct=0.30,
+        )
+        df, breakout_time, _ = _make_breakout_df()
+        fake_now = breakout_time + STEP_MS + 1
+
+        with (
+            patch("backend.signal_engine._now_ms", return_value=fake_now),
+            patch("backend.signal_engine.ensure_candles", new=AsyncMock(return_value=True)),
+            patch("backend.signal_engine.load_candles_df", new=AsyncMock(return_value=df)),
+        ):
+            await scan_config(config)
+
+        trades = await _get_sim_trades()
+        assert len(trades) == 1
+        skipped = await _get_signals(status="skipped_risk")
+        assert len(skipped) == 0
+
+    @pytest.mark.asyncio
+    async def test_filter_amplified_by_leverage(self):
+        """A modest 1% stop distance is fine unleveraged but exceeds threshold under
+        10x leverage — the filter must scale with leverage."""
+        await _setup_db()
+        # Build a breakout with a tighter stop. Re-use the synthetic flat-30 + breakout
+        # but bump the breakout close to 100.5 so distance ≈ (100.5 - 96.04)/100.5 ≈ 4.4%
+        # → leveraged 10× = 44% loss, threshold 10% → skip. Without leverage 4.4% < 10%
+        # → would NOT skip. The two cases below pin the leverage-scaling behaviour.
+        flat = _make_flat_candles(30)
+        breakout_time = flat[-1]["open_time"] + STEP_MS
+        breakout = {
+            "open_time": breakout_time,
+            "open": 100.0,
+            "high": 105.0,
+            "low": 99.5,
+            "close": 103.0,
+            "volume": 2000.0,
+            "close_time": breakout_time + STEP_MS - 1,
+        }
+        df = _candles_to_df(flat + [breakout])
+        fake_now = breakout_time + STEP_MS + 1
+
+        # Leveraged → must skip
+        config_lev = await _insert_config(
+            leverage=10.0,
+            max_loss_per_trade_enabled=1,
+            max_loss_per_trade_pct=0.10,
+        )
+        with (
+            patch("backend.signal_engine._now_ms", return_value=fake_now),
+            patch("backend.signal_engine.ensure_candles", new=AsyncMock(return_value=True)),
+            patch("backend.signal_engine.load_candles_df", new=AsyncMock(return_value=df)),
+        ):
+            await scan_config(config_lev)
+
+        async with get_db() as db:
+            cursor = await db.execute(
+                "SELECT COUNT(*) FROM sim_trades WHERE config_id = ?",
+                (config_lev["id"],),
+            )
+            assert (await cursor.fetchone())[0] == 0
+            cursor = await db.execute(
+                "SELECT COUNT(*) FROM signals WHERE config_id = ? AND status = 'skipped_risk'",
+                (config_lev["id"],),
+            )
+            assert (await cursor.fetchone())[0] == 1
 
 
 # ---------------------------------------------------------------------------
