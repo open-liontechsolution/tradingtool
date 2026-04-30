@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from backend.auth import AuthUser, get_current_user
 from backend.database import get_db
@@ -38,7 +38,11 @@ class SignalConfigCreate(BaseModel):
     polling_interval_s: int | None = None
     telegram_enabled: bool = False
     max_loss_per_trade_enabled: bool = False
-    max_loss_per_trade_pct: float = 0.02
+    # gt=0 in both modes: in `full_equity` the field is the skip-filter
+    # threshold (a 0 threshold would drop every entry); in `risk_based` it is
+    # the sizing target (a 0 target produces invested=0 no-op trades — see
+    # #147). The single guard rejects both nonsensical configurations.
+    max_loss_per_trade_pct: float = Field(0.02, gt=0)
     position_sizing_mode: Literal["full_equity", "risk_based"] = "full_equity"
 
 
@@ -52,7 +56,7 @@ class SignalConfigPatch(BaseModel):
     polling_interval_s: int | None = None
     telegram_enabled: bool | None = None
     max_loss_per_trade_enabled: bool | None = None
-    max_loss_per_trade_pct: float | None = None
+    max_loss_per_trade_pct: float | None = Field(None, gt=0)
     position_sizing_mode: Literal["full_equity", "risk_based"] | None = None
 
 

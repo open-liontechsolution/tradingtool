@@ -353,3 +353,27 @@ class TestRiskBasedSizeDegenerate:
                 max_loss_pct=0.01,
                 leverage=1.0,
             )
+
+    def test_zero_max_loss_pct_raises(self):
+        # max_loss_pct=0 would silently produce invested=0 / quantity=0 (no-op
+        # trade that still occupies the active slot). Must raise — see #147.
+        with pytest.raises(ValueError):
+            compute_risk_based_size(
+                side="long",
+                entry_price=100.0,
+                stop_base=99.0,
+                current_portfolio=10_000.0,
+                max_loss_pct=0.0,
+                leverage=1.0,
+            )
+
+    def test_negative_max_loss_pct_raises(self):
+        with pytest.raises(ValueError):
+            compute_risk_based_size(
+                side="long",
+                entry_price=100.0,
+                stop_base=99.0,
+                current_portfolio=10_000.0,
+                max_loss_pct=-0.01,
+                leverage=1.0,
+            )

@@ -177,3 +177,57 @@ def test_patch_unrelated_field_preserves_mode():
     config = _fetch_config(client, config_id)
     assert config["active"] is False
     assert config["position_sizing_mode"] == "risk_based"
+
+
+# ---------------------------------------------------------------------------
+# #147: max_loss_per_trade_pct must be > 0 in both modes
+# ---------------------------------------------------------------------------
+
+
+def test_create_rejects_zero_max_loss_pct_in_risk_based():
+    """In risk_based mode, pct=0 would produce no-op trades — pydantic must reject."""
+    user = asyncio.run(_init_schema_and_user())
+    client = TestClient(_build_app(user))
+
+    resp = client.post(
+        "/api/signals/configs",
+        json=_base_payload(position_sizing_mode="risk_based", max_loss_per_trade_pct=0),
+    )
+    assert resp.status_code == 422, resp.text
+
+
+def test_create_rejects_zero_max_loss_pct_in_full_equity():
+    """A 0 skip threshold also makes no sense — pydantic enforces gt=0 across both modes."""
+    user = asyncio.run(_init_schema_and_user())
+    client = TestClient(_build_app(user))
+
+    resp = client.post(
+        "/api/signals/configs",
+        json=_base_payload(max_loss_per_trade_pct=0),
+    )
+    assert resp.status_code == 422, resp.text
+
+
+def test_create_rejects_negative_max_loss_pct():
+    user = asyncio.run(_init_schema_and_user())
+    client = TestClient(_build_app(user))
+
+    resp = client.post(
+        "/api/signals/configs",
+        json=_base_payload(max_loss_per_trade_pct=-0.01),
+    )
+    assert resp.status_code == 422, resp.text
+
+
+def test_patch_rejects_zero_max_loss_pct():
+    user = asyncio.run(_init_schema_and_user())
+    client = TestClient(_build_app(user))
+
+    create = client.post("/api/signals/configs", json=_base_payload())
+    config_id = create.json()["id"]
+
+    resp = client.patch(
+        f"/api/signals/configs/{config_id}",
+        json={"max_loss_per_trade_pct": 0},
+    )
+    assert resp.status_code == 422, resp.text

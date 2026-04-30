@@ -6,7 +6,14 @@ const TIPS = {
   invested: 'Capital efectivo a desplegar por trade en USD. Se traduce internamente a leverage = invested/portfolio.',
 }
 
-export function CapitalConfig({ portfolio, setPortfolio, leverage, setLeverage, investedAmount, setInvestedAmount, mode, setMode, disabled }) {
+export function CapitalConfig({ portfolio, setPortfolio, leverage, setLeverage, investedAmount, setInvestedAmount, mode, setMode, disabled, lockMode = null }) {
+  // ``lockMode`` (#149): when set, the toggle whose value differs from
+  // ``lockMode`` is disabled. Caller is responsible for forcing ``mode`` to
+  // ``lockMode`` when entering the locked state — the component does not
+  // self-correct to keep the side-effect surface minimal.
+  const leverageLocked = lockMode !== null && lockMode !== 'leverage'
+  const investedLocked = lockMode !== null && lockMode !== 'invested'
+  const lockTooltip = 'En risk-based el invested_amount se ignora — sizing derivado del stop distance.'
   return (
     <div>
       <div style={{ display: 'flex', gap: 'var(--space-2)', marginBottom: 'var(--space-3)' }}>
@@ -14,13 +21,15 @@ export function CapitalConfig({ portfolio, setPortfolio, leverage, setLeverage, 
           type="button"
           className={`btn btn-sm ${mode === 'leverage' ? 'btn-primary' : 'btn-secondary'}`}
           onClick={() => setMode('leverage')}
-          disabled={disabled}
+          disabled={disabled || leverageLocked}
+          title={leverageLocked ? lockTooltip : undefined}
         >Portfolio + Leverage</button>
         <button
           type="button"
           className={`btn btn-sm ${mode === 'invested' ? 'btn-primary' : 'btn-secondary'}`}
           onClick={() => setMode('invested')}
-          disabled={disabled}
+          disabled={disabled || investedLocked}
+          title={investedLocked ? lockTooltip : undefined}
         >Portfolio + Invested</button>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-3)' }}>
