@@ -189,6 +189,23 @@ Si `frontend/dist` existe, FastAPI lo monta en `/` automáticamente.
 - `POST /api/profile/telegram/link-token` — genera deep-link con TTL 15 min
 - `DELETE /api/profile/telegram` — desvincula
 
+### Inversión recomendada (usuario autenticado)
+
+- `GET /api/recommendations?source=curated` — lista los pares con recomendación.
+- `GET /api/recommendations/{pair}?source=curated` — devuelve la recomendación primaria (estrategia, timeframe, params, métricas multi-período cacheadas) o `recommendation: null` si el par no está en el catálogo.
+
+El catálogo curado vive en `backend/data/recommendations.yaml`. Para refrescar las métricas multi-período (1y/2y/3y/5y) tras editar una entrada o cuando los datos envejecen:
+
+```bash
+python -m backend.scripts.refresh_recommendations_cache --all
+# o un par concreto:
+python -m backend.scripts.refresh_recommendations_cache --pair BTCUSDT
+# preview sin escribir el YAML:
+python -m backend.scripts.refresh_recommendations_cache --all --dry-run
+```
+
+El script descarga los klines que falten (`ensure_candles`), corre el backtest para cada ventana y reescribe `metrics_cached` y `metrics_computed_at`. Métrica `composite = max(0, profit) / max(0.01, abs(dd))` (MAR-like ratio, en fracciones decimales).
+
 ### Telegram webhook (público — auth vía secret)
 
 - `POST /api/telegram/webhook/{secret}` — consumido únicamente por Telegram Bot API.

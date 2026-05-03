@@ -6,6 +6,7 @@ import { SignalsList } from './signals/SignalsList'
 import { SimTradesList } from './signals/SimTradesList'
 import { RealTradesSection } from './signals/RealTradesSection'
 import { ComparisonView } from './signals/ComparisonView'
+import { useRecommendationApply } from './useRecommendationApply'
 
 export default function SignalsPanel() {
   const [tab, setTab] = useState('configs')
@@ -14,6 +15,12 @@ export default function SignalsPanel() {
   const [signals, setSignals] = useState([])
   const [simTrades, setSimTrades] = useState([])
   const [status, setStatus] = useState(null)
+  // Pending payload from "Aplicar a Signal Config" on the Recommended panel.
+  // ``formKey`` bumps to force ConfigForm to remount with the new
+  // initialValues (lazy-initial-state captures props on first mount only).
+  const [formInitialValues, setFormInitialValues] = useState(null)
+  const [formKey, setFormKey] = useState(0)
+  const recApply = useRecommendationApply()
 
   const fetchStrategies = useCallback(async () => {
     try {
@@ -76,6 +83,22 @@ export default function SignalsPanel() {
     const iv = window.setInterval(refreshAll, 15000)
     return () => clearInterval(iv)
   }, [fetchStrategies, refreshAll])
+
+  // Consume a pending "Aplicar a Signal Config" payload exactly once and
+  // remount the form with it. Always lands on the configs tab so the user
+  // sees the hydrated wizard immediately.
+  // The setState calls here are reacting to an external store (the
+  // RecommendationApply context), which is the legitimate use-case the
+  // react-hooks/set-state-in-effect rule explicitly carves out.
+  useEffect(() => {
+    if (recApply.pending?.target !== 'signals') return
+    const payload = recApply.consume('signals')
+    if (!payload) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setFormInitialValues(payload)
+    setFormKey(k => k + 1)
+    setTab('configs')
+  }, [recApply])
 
   const handleToggle = async (id, active) => {
     await apiFetch(`/api/signals/configs/${id}`, {
@@ -157,7 +180,12 @@ export default function SignalsPanel() {
             <ConfigsList configs={configs} onToggle={handleToggle} onToggleTelegram={handleToggleTelegram} onDelete={handleDelete} onResetEquity={handleResetEquity} />
             <hr className="divider" />
             <div className="section-title">New Configuration</div>
-            <ConfigForm strategies={strategies} onCreated={refreshAll} />
+            <ConfigForm
+              key={formKey}
+              strategies={strategies}
+              onCreated={refreshAll}
+              initialValues={formInitialValues}
+            />
           </div>
         </div>
       )}

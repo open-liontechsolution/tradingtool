@@ -4,6 +4,7 @@ import EquityChart from './EquityChart'
 import TradeLog from './TradeLog'
 import TradeReviewChart from './TradeReviewChart'
 import FieldLabel from './FieldLabel'
+import { useRecommendationApply } from './useRecommendationApply'
 
 const PAIRS = [
   'BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'XRPUSDT',
@@ -281,6 +282,8 @@ export default function BacktestPanel() {
   const [result,     setResult]     = useState(null)
   const [loadingRes, setLoadingRes] = useState(false)
 
+  const recApply = useRecommendationApply()
+
   // Fetch available strategies
   const fetchStrategies = useCallback(async () => {
     try {
@@ -304,6 +307,29 @@ export default function BacktestPanel() {
   }, [selectedStrat])
 
   useEffect(() => { fetchStrategies() }, [fetchStrategies])
+
+  // Pre-hydrate from a "Aplicar a Backtest" click on the Recommended panel.
+  // Waits until the strategy list has loaded so we can validate the payload's
+  // strategy name actually exists; consumes the payload exactly once so
+  // navigating back to this tab doesn't re-apply stale presets.
+  useEffect(() => {
+    if (!recApply.pending || recApply.pending.target !== 'backtest') return
+    if (strategies.length === 0) return
+    const payload = recApply.consume('backtest')
+    if (!payload) return
+    const stratExists = strategies.some(s => s.name === payload.strategy)
+    if (payload.symbol)   setSymbol(payload.symbol)
+    if (payload.interval) setInterval(payload.interval)
+    if (stratExists) {
+      setSelectedStrat(payload.strategy)
+      // Merge: payload params win, but unknown defaults stay so any field the
+      // recommendation didn't pin still has a sensible starting value.
+      const strat = strategies.find(s => s.name === payload.strategy)
+      const defaults = {}
+      for (const p of strat.parameters ?? []) defaults[p.name] = p.default
+      setParamValues({ ...defaults, ...(payload.params || {}) })
+    }
+  }, [recApply, strategies])
 
   // When strategy changes, reset param defaults
   const handleStrategyChange = e => {

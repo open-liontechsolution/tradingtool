@@ -4,6 +4,7 @@ import DataManager from './components/DataManager'
 import BacktestPanel from './components/BacktestPanel'
 import SignalsPanel from './components/SignalsPanel'
 import ProfilePanel from './components/ProfilePanel'
+import RecommendedInvestmentPanel from './components/RecommendedInvestmentPanel'
 
 function App() {
   const { isAuthenticated, isLoading, login, logout, user, isAdmin } = useAuth()
@@ -13,6 +14,7 @@ function App() {
     if (isAdmin) t.push({ id: 'data', label: 'Data Manager' })
     t.push({ id: 'backtest', label: 'Backtesting' })
     t.push({ id: 'signals', label: 'Signals' })
+    t.push({ id: 'recommendations', label: 'Inversión recomendada' })
     t.push({ id: 'profile', label: 'Profile' })
     return t
   }, [isAdmin])
@@ -115,6 +117,7 @@ function App() {
         {activeTab === 'data'     && isAdmin && <DataManager />}
         {activeTab === 'backtest' && <BacktestPanel />}
         {activeTab === 'signals'  && <SignalsPanel />}
+        {activeTab === 'recommendations' && <RecommendedInvestmentPanel selectTab={selectTab} />}
         {activeTab === 'profile'  && <ProfilePanel />}
       </main>
     </div>

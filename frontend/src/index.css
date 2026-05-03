@@ -965,3 +965,57 @@ select.form-control option {
 .config-badge-wrap:hover .config-badge-popover {
   display: block;
 }
+
+/* Recommended Investments panel */
+.rec-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.25rem 0.6rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  border: 1px solid var(--border-default);
+}
+.rec-chip--strategy {
+  background: rgba(99, 102, 241, 0.12);
+  border-color: rgba(99, 102, 241, 0.4);
+  color: var(--accent-primary, #6366f1);
+}
+.rec-chip--tf {
+  background: rgba(34, 197, 94, 0.10);
+  border-color: rgba(34, 197, 94, 0.35);
+  color: var(--color-success, #22c55e);
+}
+
+.rec-freshness {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.2rem 0.55rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.74rem;
+  font-style: italic;
+  border: 1px solid transparent;
+}
+.rec-freshness--ok {
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+  border-color: var(--border-default);
+}
+.rec-freshness--aging {
+  background: rgba(245, 158, 11, 0.12);
+  color: var(--color-warning, #f59e0b);
+  border-color: rgba(245, 158, 11, 0.35);
+}
+.rec-freshness--stale {
+  background: rgba(239, 68, 68, 0.12);
+  color: var(--color-danger, #ef4444);
+  border-color: rgba(239, 68, 68, 0.35);
+}
+
+.rec-params summary::-webkit-details-marker { display: none; }
+.rec-params summary::marker { content: ''; }
+.rec-params summary::before { content: '▸ '; color: var(--text-muted); }
+.rec-params[open] summary::before { content: '▾ '; }

@@ -1,0 +1,67 @@
+version: 1
+# Curated catalogue of recommended (strategy, timeframe, params) tuples per pair.
+#
+# Schema (per pair):
+#   <PAIR>:
+#     primary:
+#       strategy: <name registered in backend.strategies>
+#       timeframe: <Binance interval string: '1h', '4h', '1d', ...>
+#       source: 'curated'                # reserved future values: 'ai', 'community'
+#       validated_at: <YYYY-MM-DD>       # when the human last hand-validated this entry
+#       validated_by: <human handle>
+#       validation_window: { start: 'YYYY-MM-DD', end: 'YYYY-MM-DD' }
+#       params: { ... strategy-specific param dict ... }
+#       rationale: <short paragraph>
+#       metrics_cached:                  # MAR-ratio composite = profit / abs(dd)
+#         '1y': { profit: <fraction>, dd: <fraction>, composite: <ratio>, n_trades: <int> }
+#         '2y': { ... }
+#         '3y': { ... }
+#         '5y': { ... }
+#       metrics_computed_at: <ISO 8601 timestamp; rewritten by the refresh script>
+#
+# `profit` and `dd` are stored as decimal fractions (0.71 == +71%, -0.16 == -16% drawdown).
+# `composite = max(0, profit) / max(0.01, abs(dd))` — refresh script is the source of truth.
+#
+# Refresh with:
+#   python -m backend.scripts.refresh_recommendations_cache --all
+#
+# Seed entries below were hand-tuned during the #132 research sessions. The
+# numbers under metrics_cached are placeholders until the refresh script runs
+# against the local DB — at which point metrics_computed_at is rewritten with
+# the real ISO timestamp.
+
+recommendations:
+  BTCUSDT:
+    primary:
+      strategy: mean_reversion_bb
+      timeframe: '4h'
+      source: curated
+      validated_at: '2026-04-15'
+      validated_by: juanjo
+      validation_window:
+        start: '2022-01-01'
+        end: '2026-04-15'
+      params:
+        bb_period: 30
+        bb_std: 3.0
+        rsi_period: 14
+        rsi_oversold: 30.0
+        rsi_overbought: 65.0
+        stop_pct: 0.05
+        salida_a_mean: false
+        salida_banda_opuesta: true
+        sma_filter_n: 200
+        modo_ejecucion: open_next
+        habilitar_long: true
+        habilitar_short: true
+        coste_total_bps: 10.0
+      rationale: >-
+        Mean reversion con filtro de tendencia HTF (SMA 200). Compra dips contra
+        bandas Bollinger 30/3 con RSI sobreventa, sale en banda opuesta. Validado
+        en bull (2022-24) y chop (2024-26).
+      metrics_cached:
+        '1y': { profit: 0.18, dd: -0.09, composite: 2.0, n_trades: 23 }
+        '2y': { profit: 0.41, dd: -0.13, composite: 3.15, n_trades: 47 }
+        '3y': { profit: 0.55, dd: -0.16, composite: 3.44, n_trades: 71 }
+        '5y': { profit: 0.71, dd: -0.16, composite: 4.44, n_trades: 118 }
+      metrics_computed_at: '2026-04-15T14:23:00Z'

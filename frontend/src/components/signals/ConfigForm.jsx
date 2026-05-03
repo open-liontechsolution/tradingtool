@@ -49,12 +49,18 @@ function StepIndicator({ step }) {
   )
 }
 
-export function ConfigForm({ strategies, onCreated }) {
+export function ConfigForm({ strategies, onCreated, initialValues }) {
+  // ``initialValues`` is captured at construction (lazy initial state) so
+  // remounting the form via a fresh ``key`` is the only way to re-apply a new
+  // preset — exactly the contract SignalsPanel relies on for the
+  // "Aplicar a Signal Config" flow. Mid-flight prop changes are ignored on
+  // purpose: a user editing the form must never have inputs clobbered by a
+  // stale parent state.
   const [step, setStep] = useState(1)
-  const [symbol, setSymbol] = useState('BTCUSDT')
-  const [interval, setInterval] = useState('1d')
-  const [selectedStrat, setSelectedStrat] = useState('')
-  const [paramValues, setParamValues] = useState({})
+  const [symbol, setSymbol] = useState(initialValues?.symbol ?? 'BTCUSDT')
+  const [interval, setInterval] = useState(initialValues?.interval ?? '1d')
+  const [selectedStrat, setSelectedStrat] = useState(initialValues?.strategy ?? '')
+  const [paramValues, setParamValues] = useState(() => ({ ...(initialValues?.params ?? {}) }))
   const [costBps, setCostBps] = useState(10)
   const [maintenanceMarginPct, setMaintenanceMarginPct] = useState(0.005)
   const [maxLossEnabled, setMaxLossEnabled] = useState(false)
@@ -69,7 +75,20 @@ export function ConfigForm({ strategies, onCreated }) {
   const toast = useToast()
 
   useEffect(() => {
-    if (strategies.length > 0 && !selectedStrat) {
+    if (strategies.length === 0) return
+    if (selectedStrat) {
+      // A strategy is already pinned (from initialValues or user choice).
+      // Fill in any missing params with the strategy's defaults so the form
+      // is fully populated, but never overwrite values the user/initial
+      // payload already provided.
+      const strat = strategies.find(s => s.name === selectedStrat)
+      if (!strat) return
+      setParamValues(prev => {
+        const merged = {}
+        for (const p of strat.parameters ?? []) merged[p.name] = p.default
+        return { ...merged, ...prev }
+      })
+    } else {
       const first = strategies[0]
       setSelectedStrat(first.name)
       const defaults = {}
