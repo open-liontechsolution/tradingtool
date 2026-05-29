@@ -1,5 +1,5 @@
 image:
-  tag: "dev-eb04f38"
+  tag: "dev-939fa90"
 namespace:
   name: "tradingtool-dev"
   create: true
