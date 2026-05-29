@@ -73,10 +73,16 @@ helm/env/secrets-*.yaml
 /credentials.txt
 /.env*
 
-# Claude — only commit project-scoped skills, never per-user settings.
+# Claude — commit project-scoped automations (skills, hooks, agents, shared
+# settings), never per-user settings (settings.local.json stays ignored).
 .claude/*
 !.claude/skills/
 !.claude/skills/**
+!.claude/settings.json
+!.claude/hooks/
+!.claude/hooks/**
+!.claude/agents/
+!.claude/agents/**
 .mcp.json
 
 # QA walkthrough screenshots — heavy, regenerable, kept local.
