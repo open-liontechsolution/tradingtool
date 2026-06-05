@@ -8,8 +8,10 @@ from backend.strategies.breakout_trailing import BreakoutTrailingStrategy
 from backend.strategies.donchian_adx_atr import DonchianAdxAtrStrategy
 from backend.strategies.donchian_long_term import DonchianLongTermStrategy
 from backend.strategies.mean_reversion_bb import MeanReversionBBStrategy
+from backend.strategies.rsi_reversion import RsiReversionStrategy
 from backend.strategies.support_resistance import SupportResistanceStrategy
 from backend.strategies.support_resistance_trailing import SupportResistanceTrailingStrategy
+from backend.strategies.trend_rider import TrendRiderStrategy
 from backend.strategies.zigzag_momentum import ZigzagMomentumStrategy
 
 _REGISTRY: dict[str, type[Strategy]] = {}
@@ -27,6 +29,8 @@ _register(DonchianAdxAtrStrategy)
 _register(DonchianLongTermStrategy)
 _register(ZigzagMomentumStrategy)
 _register(MeanReversionBBStrategy)
+_register(RsiReversionStrategy)
+_register(TrendRiderStrategy)
 
 
 def get_strategy(name: str) -> Strategy:
