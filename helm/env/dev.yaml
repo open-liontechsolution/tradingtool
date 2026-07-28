@@ -9,7 +9,11 @@ config:
   CORS_ORIGINS: "https://tradingtool-dev.liontechsolution.com"
 existingSecret: "tradingtools-secret-dev"
 cloudflareTunnel:
-  enabled: true
+  # tradingtool-dev.liontechsolution.com is now served by the cluster-wide shared tunnel
+  # (k3s-nonprod, ns cloudflared), which reaches this Service over ClusterIP:8000. No
+  # per-pod cloudflared needed. existingSecret is kept so reverting is just flipping this
+  # back to true; the token itself is removed from the secret once the migration is closed.
+  enabled: false
   existingSecret: "tradingtools-secret-dev"
 networkPolicy:
   # Enable egress NetworkPolicy to allow traffic to the PostgreSQL namespace
