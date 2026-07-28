@@ -205,13 +205,13 @@ Replays a fixed klines fixture through both the backtest engine and the live eng
 | Postgres (CNPG) | shared cluster `platform-postgres-dev` in `data-dev`, DB `tradingtool-dev`, user `tradingtool-dev-user` | shared cluster `platform-postgres-dev` in `data-dev`, DB `tradingtool-qa`, user `tradingtool-qa-user` |
 | Keycloak realm | `tradingtool-dev` | `tradingtool-qa` |
 | Telegram bot | dedicated bot from `@BotFather` | dedicated bot from `@BotFather` |
-| Cloudflare Tunnel | dedicated tunnel (sidecar pattern) | dedicated tunnel (sidecar pattern) |
+| Cloudflare Tunnel | shared cluster tunnel `k3s-nonprod` (route in Zero Trust) | shared cluster tunnel `k3s-nonprod` (route in Zero Trust) |
 | `LOG_LEVEL` | `debug` | `info` |
-| Argo `syncPolicy` | manual | automated (prune + selfHeal) |
+| Argo `syncPolicy` | automated (prune) | automated (prune) |
 | Build workflow | `.github/workflows/build-dev.yml` | `.github/workflows/build-qa.yml` |
 | Trigger | push to `develop` (every commit) | `workflow_dispatch` (manual) **or** push of tag `v*.*.*-rc*` |
 
-- **dev pipeline**: push to `develop` → `build-dev.yml` builds multi-arch image, scans with Trivy (HIGH/CRITICAL fixable blocks promotion), updates `helm/env/dev.yaml` image tag, and finally runs a `cleanup-old-versions` job that prunes GHCR (keep last 90 — multi-arch creates 3 versions per push, so this retains ~30 builds, ≈3 days of heavy activity). The cleanup runs **last** because Trivy resolves the manifest-list digest and pulls platform-child manifests; deleting GHCR versions before Trivy finishes can vanish those children mid-scan and break the resolution. Argo `trading-tool` Application is sync-manual, so a human still clicks Sync in the Argo UI.
+- **dev pipeline**: push to `develop` → `build-dev.yml` builds multi-arch image, scans with Trivy (HIGH/CRITICAL fixable blocks promotion), updates `helm/env/dev.yaml` image tag, and finally runs a `cleanup-old-versions` job that prunes GHCR (keep last 90 — multi-arch creates 3 versions per push, so this retains ~30 builds, ≈3 days of heavy activity). The cleanup runs **last** because Trivy resolves the manifest-list digest and pulls platform-child manifests; deleting GHCR versions before Trivy finishes can vanish those children mid-scan and break the resolution. The Argo `trading-tool` Application is **auto-sync** (`automated: {prune: true}`), so a merge to `develop` deploys itself with no human gate.
 - **qa pipeline**: same shape as dev plus a `resolve-tag` job at the front that branches on event:
   - `push: tags: 'v*.*.*-rc*'` → image tag is the version itself (e.g. `v1.2.0-rc1`).
   - `workflow_dispatch` → image tag is `qa-<short_sha>`.
