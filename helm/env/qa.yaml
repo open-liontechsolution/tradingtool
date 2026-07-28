@@ -9,13 +9,6 @@ config:
   CORS_ORIGINS: "https://tradingtool-qa.liontechsolution.com"
   KEYCLOAK_REALM: "tradingtool-qa"
 existingSecret: "tradingtools-secret-qa"
-cloudflareTunnel:
-  # tradingtool-qa.liontechsolution.com is now served by the cluster-wide shared tunnel
-  # (k3s-nonprod, ns cloudflared), which reaches this Service over ClusterIP:8000. The
-  # Access Application is bound to the hostname, not to the tunnel, so it is unaffected.
-  # existingSecret is kept so reverting is just flipping this back to true.
-  enabled: false
-  existingSecret: "tradingtools-secret-qa"
 networkPolicy:
   enabled: true
   # CNPG cluster `platform-postgres-dev` is shared between dev and qa;

@@ -75,27 +75,6 @@ spec:
               mountPath: /tmp
             - name: data
               mountPath: /app/data
-        {{- if .Values.cloudflareTunnel.enabled }}
-        - name: cloudflared
-          image: "{{ .Values.cloudflareTunnel.image.repository }}:{{ .Values.cloudflareTunnel.image.tag }}"
-          imagePullPolicy: {{ .Values.cloudflareTunnel.image.pullPolicy }}
-          securityContext:
-            {{- toYaml .Values.cloudflareTunnel.securityContext | nindent 12 }}
-          args:
-            - tunnel
-            - --no-autoupdate
-            - run
-            - --token
-            - $(CLOUDFLARE_TUNNEL_TOKEN)
-          env:
-            - name: CLOUDFLARE_TUNNEL_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.cloudflareTunnel.existingSecret }}
-                  key: {{ .Values.cloudflareTunnel.secretKey }}
-          resources:
-            {{- toYaml .Values.cloudflareTunnel.resources | nindent 12 }}
-        {{- end }}
       volumes:
         - name: tmp
           emptyDir: {}
